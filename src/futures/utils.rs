@@ -8,7 +8,8 @@ pub use futures_lite::future::yield_now;
 ///   1) Wrap synchronous communication primitives (like `Arc<AtomicIsize>`) in an async block, so
 ///      that the scheduler yields when it should, or
 ///
-///   2) Enlarge the state space that a simulation will explire.
+///   2) Artificially enlarge the state space that a simulation will explore. (Good for
+///      benchmarking.)
 #[inline]
 pub async fn asyncify<F: FnOnce() -> T, T>(f: F) -> T {
     yield_now().await;

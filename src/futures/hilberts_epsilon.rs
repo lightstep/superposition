@@ -8,7 +8,8 @@ use super::Executor;
 
 // Re-export the iproduct macro from itertools.
 //
-// This macro is an ergonomic way to create the Cartesian product of multiple iterators, especially when their types are heterogenous.
+// This macro is an ergonomic way to create the Cartesian product of multiple iterators,
+// especially when their types are heterogenous.
 pub use itertools::iproduct;
 
 /// Hilbert's "Epsilon Operator" for async nondeterminism.

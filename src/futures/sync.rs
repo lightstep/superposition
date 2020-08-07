@@ -1,11 +1,13 @@
 /// Re-export an implementation of an async mutex.
 ///
 /// Note that this Mutex implementation was chosen because it has no dependencies on real time.
+///
+/// Other crates, such as async-lock and async-mutex, depend on real time, so they are unsuitable.
 pub use futures_util::lock::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 
 /// Re-export an implementation of an intrusive async mutex.
 ///
-/// It is probably sloer than the Mutex from futures_util, although it is easier to use.
+/// It is probably faster than the Mutex from futures_util, although it is harder to use.
 ///
 /// Currently, it expects a second argument in its initializer: whether the lock is fair or not.
 ///
