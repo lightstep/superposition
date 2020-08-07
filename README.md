@@ -22,7 +22,7 @@ There are strategies to reduce this computational burden. The most important run
 
 However, more fundamentally, adhering to the Small Scope Hypothesis may be the most important way to mitigate the combinatorial explosion of states. The Small Scope Hypothesis says that if a program can fail, then it will fail on a simple case. (For more background on this, the paper "SmallCheck and Lazy SmallCheck" provides a good overview.)
 
-Therefore, if we believe the Small Scope hypothesis, and we can exhastively check our code in small scopes, then we can believe that our code is correct.
+Therefore, if we believe the Small Scope Hypothesis, and we exhaustively check our code in those small scopes, then we have reason to believe that our code is correct.
 
 ## Why Superposition?
 
@@ -30,7 +30,7 @@ Specification systems like TLC and Alloy provide exhaustive finite model checkin
 
 Simulation systems to test real code are either not exhaustive (they are just fuzzers), or they are not intended for testing billions and trillions of states (such as Carl Lerche's Loom project).
 
-Superposition tries to get the benefits of both: testing real code with huge state spaces.
+Superposition tries to get the benefits of both: exhaustively testing the state-space of real code.
 
 ## Features
 
