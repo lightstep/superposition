@@ -19,3 +19,6 @@ thiserror = "1"
 
 [dev-dependencies]
 impls = "1"
+
+[profile.test]
+opt-level = 2

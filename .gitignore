@@ -1,2 +1,11 @@
+# Rust ignorables.
 /target
 Cargo.lock
+
+# Editor ignorables.
+*.swp
+*.swo
+
+# Miscellaneous tool ignorables.
+perf.data
+perf.data.old
