@@ -48,7 +48,7 @@ type Runnable = async_task::Task<TaskId>;
 ///
 /// Tasks that panic get immediately canceled. Awaiting a canceled task also causes a panic.
 ///
-/// If a task panics, the panic will be thrown by the [`Ticker::tick()`] invocation that polled it.
+/// If a task panics, the panic will be thrown by the Ticker::tick() invocation that polled it.
 #[must_use = "tasks get canceled when dropped, use `.detach()` to run them in the background"]
 #[derive(Debug)]
 pub struct Task<T>(Option<async_task::JoinHandle<T, TaskId>>);

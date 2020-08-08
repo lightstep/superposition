@@ -1,3 +1,5 @@
+//! Defines the Controller trait that provides user hooks.
+
 use super::executor::Executor;
 
 /// Events used to track behavior and manage state during a simulation.

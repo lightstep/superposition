@@ -11,7 +11,7 @@ use std::{
 
 use criterion::{criterion_group, criterion_main, Criterion};
 
-use superposition::{dfs::Dfs, kripke_structure::KripkeStructure};
+use superposition::{dfs::Dfs, KripkeStructure};
 
 #[derive(Default, Clone)]
 struct MyBench {
