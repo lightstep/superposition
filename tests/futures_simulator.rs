@@ -177,16 +177,35 @@ fn detects_livelock() {
 #[test]
 fn detects_deadlock() {
     #[derive(Default)]
-    struct MyTest;
+    struct MyTest {
+        num_trajectories_with_unfinished_tasks: usize,
+    }
 
     impl Controller for MyTest {
         #[inline]
         fn on_restart(self, ex: &Executor) -> Self {
             let a: Arc<AsyncMutex<()>> = Default::default();
+            let b: Arc<AsyncMutex<()>> = Default::default();
+
+            ex.spawn({
+                let a = a.clone();
+                let b = b.clone();
+
+                async move {
+                    let _guard_a = a.lock().await;
+
+                    // TODO(rw): write our own sync primitives that always correctly yield to the
+                    // scheduler.
+                    yield_now().await;
+
+                    let _guard_b = b.lock().await;
+                }
+            })
+            .detach();
 
             ex.spawn(async move {
-                let _guard_0 = a.lock().await;
-                let _guard_1 = a.lock().await;
+                let _guard_b = b.lock().await;
+                let _guard_a = a.lock().await;
             })
             .detach();
 
@@ -197,14 +216,20 @@ fn detects_deadlock() {
             self
         }
         #[inline]
-        fn on_end_of_trajectory(self, ex: &Executor) -> Self {
-            assert_ne!(0, ex.unfinished_tasks());
+        fn on_end_of_trajectory(mut self, ex: &Executor) -> Self {
+            if ex.unfinished_tasks() >= 1 {
+                self.num_trajectories_with_unfinished_tasks += 1;
+            }
             self
         }
     }
     let sim = <Simulator<MyTest>>::new(MyTest::default());
 
     dfs(&sim, Some(100)).unwrap();
+
+    let c = sim.take_controller();
+
+    assert!(c.num_trajectories_with_unfinished_tasks >= 1);
 }
 
 #[test]
