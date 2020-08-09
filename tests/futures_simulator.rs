@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use superposition::{
-    dfs::{dfs, DfsError},
+    dfs::{dfs, Dfs, DfsError},
     futures::{
         hilberts_epsilon::{hilberts_epsilon, iproduct},
         sync::AsyncMutex,
@@ -30,7 +30,7 @@ fn minimal_simulation() {
 
     let sim = <Simulator<MyTest>>::new(MyTest);
 
-    dfs(&sim, None).unwrap();
+    Dfs::new(&sim, None).run_to_completion().unwrap();
 }
 
 #[test]
@@ -171,7 +171,7 @@ fn detects_livelock() {
 
     let ret = dfs(&sim, Some(100));
 
-    assert_eq!(ret, Err(DfsError::MaxDepthExceeded(100)));
+    assert_eq!(ret, Err(DfsError::MaxDepthExceeded(101)));
 }
 
 #[test]
