@@ -74,31 +74,70 @@ impl<T, I> PathState<T, I> {
     }
 }
 
+/// An iterator to execute depth-first-search over a KripkeStructure.
+pub struct Dfs<KS, L, I> {
+    ks: KS,
+    max_depth: Option<usize>,
+
+    stack: PathState<L, I>,
+}
+
+impl<KS> Dfs<KS, KS::Label, KS::LabelIterator>
+where
+    KS: KripkeStructure + Copy,
+    Self: Iterator<Item = Result<(), DfsError>>,
+{
+    pub fn new(ks: KS, max_depth: Option<usize>) -> Self {
+        let mut stack = PathState::new();
+        ks.restart();
+        stack.append(ks.successors());
+        Self {
+            ks,
+            max_depth,
+            stack,
+        }
+    }
+
+    pub fn run_to_completion(&mut self) -> Result<(), DfsError> {
+        self.collect()
+    }
+}
+
+impl<KS> Iterator for Dfs<KS, KS::Label, KS::LabelIterator>
+where
+    KS: KripkeStructure + Copy,
+{
+    type Item = Result<(), DfsError>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        // The negative case is more common, so make it the first branch.
+        if !self.stack.is_empty() {
+            self.ks.restart();
+            for (_, label) in self.stack.items.iter().copied().enumerate() {
+                self.ks.transition(label);
+            }
+
+            if !self.stack.append(self.ks.successors()) {
+                self.stack.advance();
+            } else if let Some(d) = self.max_depth {
+                let l = self.stack.items.len();
+                if l > d {
+                    return Some(Err(DfsError::MaxDepthExceeded(l)));
+                }
+            }
+            Some(Ok(()))
+        } else {
+            None
+        }
+    }
+}
+
 /// Run depth-first-search over a KripkeStructure.
 pub fn dfs<KS>(ks: KS, max_depth: Option<usize>) -> Result<(), DfsError>
 where
     KS: KripkeStructure + Copy,
     <KS as KripkeStructure>::Label: std::fmt::Debug,
 {
-    let mut stack: PathState<KS::Label, KS::LabelIterator> = PathState::new();
-
-    ks.restart();
-    stack.append(ks.successors());
-
-    while !stack.is_empty() {
-        if let Some(d) = max_depth {
-            if stack.items.len() >= d {
-                return Err(DfsError::MaxDepthExceeded(d));
-            }
-        }
-
-        ks.restart();
-        for (_, label) in stack.items.iter().copied().enumerate() {
-            ks.transition(label);
-        }
-        if !stack.append(ks.successors()) {
-            stack.advance();
-        }
-    }
-    Ok(())
+    Dfs::new(ks, max_depth).run_to_completion()
 }
