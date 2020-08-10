@@ -6,6 +6,7 @@ use crate::futures::{Controller, Executor};
 use crate::KripkeStructure;
 
 /// Combine an Executor with a Controller to deterministically and repeatedly run async code.
+#[derive(Clone)]
 pub struct Simulator<C> {
     executor: Executor,
     controller: Arc<Mutex<Option<C>>>,
@@ -29,6 +30,23 @@ impl<C> Simulator<C> {
     #[inline]
     pub fn put_controller(&self, c: C) {
         self.controller.lock().replace(c);
+    }
+}
+
+/// Default for Simulator needs to be customized so that the owned Controller is created and stored
+/// as Some, instead of as None.
+impl<C> Default for Simulator<C>
+where
+    C: Default,
+{
+    fn default() -> Self {
+        let executor = Executor::default();
+        let controller = C::default();
+        let controller = Arc::new(Mutex::new(Some(controller)));
+        Self {
+            executor,
+            controller,
+        }
     }
 }
 
