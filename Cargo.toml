@@ -18,7 +18,13 @@ spin = "0.5"
 thiserror = "1"
 
 [dev-dependencies]
+criterion = "0.3.3"
 impls = "1"
+mimalloc = "0.1"
 
 [profile.test]
 opt-level = 2
+
+[[bench]]
+name = "futures_simulator_overhead"
+harness = false

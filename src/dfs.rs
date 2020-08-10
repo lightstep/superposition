@@ -101,6 +101,14 @@ where
     pub fn run_to_completion(&mut self) -> Result<(), DfsError> {
         self.collect()
     }
+
+    #[inline]
+    pub fn restart(&mut self) {
+        self.stack.items.clear();
+        self.stack.iters.clear();
+        self.ks.restart();
+        self.stack.append(self.ks.successors());
+    }
 }
 
 impl<KS> Iterator for Dfs<KS, KS::Label, KS::LabelIterator>
@@ -111,13 +119,14 @@ where
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        // The negative case is more common, so make it the first branch.
+        // The negative case is probably more common, so make it the first branch.
         if !self.stack.is_empty() {
             self.ks.restart();
             for (_, label) in self.stack.items.iter().copied().enumerate() {
                 self.ks.transition(label);
             }
 
+            // The negative case is probably more common, so make it the first branch.
             if !self.stack.append(self.ks.successors()) {
                 self.stack.advance();
             } else if let Some(d) = self.max_depth {
@@ -137,7 +146,6 @@ where
 pub fn dfs<KS>(ks: KS, max_depth: Option<usize>) -> Result<(), DfsError>
 where
     KS: KripkeStructure + Copy,
-    <KS as KripkeStructure>::Label: std::fmt::Debug,
 {
     Dfs::new(ks, max_depth).run_to_completion()
 }
