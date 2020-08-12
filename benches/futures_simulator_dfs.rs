@@ -68,16 +68,13 @@ fn f(b: &mut criterion::Bencher, n_processes: usize, n_yields_explicit: usize) {
 }
 
 fn bench(c: &mut Criterion) {
-    let mut group = c.benchmark_group("futures-simulator-overhead");
-    //group.bench_function("1p1y", move |b| f(b, 1, 1));
-    //group.bench_function("1p2y", move |b| f(b, 1, 2));
-    //group.bench_function("1p3y", move |b| f(b, 1, 3));
-    //group.bench_function("1p4y", move |b| f(b, 1, 4));
+    let mut group = c.benchmark_group("futures-simulator-dfs");
+    group.bench_function("1p1y", move |b| f(b, 1, 1));
     group.bench_function("2p1y", move |b| f(b, 2, 1));
     group.bench_function("2p2y", move |b| f(b, 2, 2));
     group.bench_function("2p3y", move |b| f(b, 2, 3));
     group.bench_function("2p4y", move |b| f(b, 2, 4));
-    group.bench_function("2p45", move |b| f(b, 2, 5));
+    group.bench_function("2p5y", move |b| f(b, 2, 5));
     group.bench_function("3p1y", move |b| f(b, 3, 1));
     group.bench_function("3p2y", move |b| f(b, 3, 2));
     group.bench_function("3p3y", move |b| f(b, 3, 3));
