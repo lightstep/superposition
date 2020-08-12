@@ -1,14 +1,17 @@
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use std::{sync::{Arc, atomic::{AtomicUsize, Ordering}}, time::Instant};
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
 
 use criterion::{criterion_group, criterion_main, Criterion};
 
-use superposition::{
-    dfs::Dfs,
-    kripke_structure::KripkeStructure,
-};
+use superposition::{dfs::Dfs, kripke_structure::KripkeStructure};
 
 #[derive(Default, Clone)]
 struct MyBench {
@@ -45,7 +48,7 @@ impl KripkeStructure for &MyBench {
             None
         }
     }
-            
+
     #[inline]
     fn restart(self) {
         self.depth.store(0, Ordering::SeqCst);
