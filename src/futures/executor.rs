@@ -6,7 +6,7 @@ use std::future::Future;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::sync::{
-    atomic::{AtomicIsize, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering},
     Arc,
 };
 use std::task::{Context, Poll};
@@ -73,10 +73,11 @@ impl<T> Task<T> {
     /// canceling because it also waits for the task to stop running.
     #[inline]
     pub async fn cancel(self) -> Option<T> {
-        let mut task = self;
-        let handle = task.0.take().unwrap();
-        handle.cancel();
-        handle.await
+        unreachable!("TODO(rw): double-check this for correctness");
+        // let mut task = self;
+        // let handle = task.0.take().unwrap();
+        // handle.cancel();
+        // handle.await
     }
 }
 
@@ -116,6 +117,13 @@ pub struct Executor {
 
     /// Count of unfinished tasks. Used for deadlock detection.
     unfinished_tasks: Arc<AtomicIsize>,
+
+    /// Flag to indicate if the choices vec is accepting new tasks.
+    accepting_choices: Arc<AtomicBool>,
+
+    /// Flag to indicate whether the choices_queue needs draining.
+    /// TODO(rw): Remove this if we move to a Sync queue with less overhead than ConcurrentQueue.
+    choices_queue_dirty: Arc<AtomicBool>,
 }
 
 impl UnwindSafe for Executor {}
@@ -128,6 +136,8 @@ impl Default for Executor {
             choices: Arc::new(Mutex::new(Vec::new())),
             choices_queue: Arc::new(ConcurrentQueue::unbounded()),
             unfinished_tasks: Arc::new(AtomicIsize::new(0)),
+            accepting_choices: Arc::new(AtomicBool::new(true)),
+            choices_queue_dirty: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -155,14 +165,29 @@ impl Executor {
 
         // The function that schedules a runnable task when it gets woken up.
         let schedule = {
+            let choices = self.choices.clone();
             let choices_queue = self.choices_queue.clone();
+            let accepting_choices = self.accepting_choices.clone();
+            let choices_queue_dirty = self.choices_queue_dirty.clone();
 
+            // NOTE(rw): async-task promises that this won't be called if a task is dropped
+            // before being run. Which, I think, implies that it can't cause an infinite loop
+            // of task creation.
             move |runnable| {
-                // NOTE(rw): async-task promises that this won't be called if a task is dropped
-                // before being run.
-                choices_queue
-                    .push(runnable)
-                    .expect("internal queue depth too large");
+                // Try to push the runnable on to the primary choices set, which has the least
+                // overhead. If that object is already locked, push the runnable to the choices
+                // queue and mark the choices queue as dirty.
+                match choices.try_lock() {
+                    Some(mut guard) if accepting_choices.load(Ordering::SeqCst) => {
+                        guard.push(runnable);
+                    }
+                    Some(_) | None => {
+                        choices_queue
+                            .push(runnable)
+                            .expect("internal queue depth too large");
+                        choices_queue_dirty.store(true, Ordering::SeqCst);
+                    }
+                }
             }
         };
 
@@ -187,9 +212,7 @@ impl Executor {
     /// The return value indicates if the trajectory is finished.
     #[inline]
     pub fn choose_any(&self) -> bool {
-        self.collect_pending_choices();
         let c = self.choices();
-        assert_eq!(0, self.choices_queue.len());
         if c >= 1 {
             // Choosing the last choice is faster because of an implementation detail:
             // Vec::swap_remove won't need to do two random reads, just one.
@@ -207,10 +230,20 @@ impl Executor {
     /// Valid inputs to this function are created by calling `choices`.
     #[inline]
     pub fn choose(&self, idx: usize) {
-        self.collect_pending_choices();
-        assert_eq!(0, self.choices_queue.len());
+        // Assert that the choices queue is empty, because 1) it should have been drained already,
+        // and 2) if it has tasks in it, then it's possible that user code is creating tasks
+        // out-of-band (such as by using real time or background threads).
+        debug_assert_eq!(0, self.choices_queue.len());
+
+        // Fetch the requested task, removing it from the set of choices.
         let r = self.choices.lock().swap_remove(idx);
+
+        // Poll the requested task.
         r.run();
+
+        // Collect the pending choices, which establishes the invariants needed when calling
+        // `choices`.
+        self.collect_pending_choices();
     }
 
     /// Calculate the number of available choices.
@@ -221,7 +254,6 @@ impl Executor {
     /// argument to `choose`.
     #[inline]
     pub fn choices(&self) -> usize {
-        self.collect_pending_choices();
         self.choices.lock().len()
     }
 
@@ -233,6 +265,9 @@ impl Executor {
     /// repeated simulation runs.
     #[inline]
     pub fn reset(&self) {
+        // Stop accepting choices, for the duration of this function.
+        self.accepting_choices.store(false, Ordering::SeqCst);
+
         // Clear the existing choices.
         self.choices.lock().clear();
 
@@ -240,16 +275,22 @@ impl Executor {
         // This should be finite because dropped tasks cannot be scheduled again, according to the
         // behavior of the async-task library.
         // NOTE(rw): Re-verify this reasoning.
-        while self.choices_queue.pop().is_ok() {}
+        if self.choices_queue_dirty.load(Ordering::SeqCst) {
+            while self.choices_queue.pop().is_ok() {}
+            self.choices_queue_dirty.store(false, Ordering::SeqCst);
+        }
 
-        // Reset the number of unfinished_tasks.
-        self.unfinished_tasks.store(0, Ordering::SeqCst);
-
-        assert_eq!(
+        debug_assert_eq!(
             0,
             self.choices.lock().len(),
             "a task woke up after the executor was reset, your code may be using real time"
         );
+
+        // Reset the number of unfinished_tasks.
+        self.unfinished_tasks.store(0, Ordering::SeqCst);
+
+        // Start accepting choices again.
+        self.accepting_choices.store(true, Ordering::SeqCst);
     }
 
     /// Obtain the number of unfinished tasks.
@@ -270,20 +311,30 @@ impl Executor {
     /// Sorts the full choices vector for determinism.
     #[inline]
     pub fn collect_pending_choices(&self) {
+        // Drain the choices_queue into the choices vec.
         let mut choices = self.choices.lock();
 
-        // Drain the choices_queue into the choices vec.
-        let mut pushed = false;
-        while let Ok(r) = self.choices_queue.pop() {
-            choices.push(r);
-            pushed |= true;
+        // TODO(rw): remove choices_queue_dirty once we use a queue with less overhead.
+        if self.choices_queue_dirty.load(Ordering::SeqCst) {
+            // Drain only as many tasks from the queue as there are to start with. This prevents a
+            // possible infinite loop wherein tasks are spawning tasks on drop.
+            let l = self.choices_queue.len();
+            for _ in 0..l {
+                if let Ok(r) = self.choices_queue.pop() {
+                    choices.push(r);
+                }
+            }
+
+            debug_assert_eq!(
+                0,
+                self.choices_queue.len(),
+                "your tasks are creating new tasks on drop"
+            );
         }
 
         // For determinism, sort tasks by the tag, which is the unique task id.
         // TODO(rw): Try replacing the choices vec with a BTreeMap or rank/select data structure.
-        if pushed {
-            choices.sort_by_key(|t| *t.tag());
-        }
+        choices.sort_by_key(|t| *t.tag());
     }
 }
 

@@ -26,5 +26,9 @@ mimalloc = "0.1"
 opt-level = 2
 
 [[bench]]
-name = "futures_simulator_overhead"
+name = "futures_simulator_dfs"
+harness = false
+
+[[bench]]
+name = "dfs_overhead"
 harness = false
