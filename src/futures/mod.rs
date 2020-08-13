@@ -1,11 +1,16 @@
-pub mod controller;
-pub mod executor;
+//! Modeling and execution utilities.
+
+mod controller;
+pub use controller::Controller;
+
+mod executor;
+pub use executor::{Executor, Task};
+
 pub mod hilberts_epsilon;
 pub mod on_ready_fn;
-pub mod simulator;
+
+mod simulator;
+pub use simulator::Simulator;
+
 pub mod sync;
 pub mod utils;
-
-pub use controller::Controller;
-pub use executor::Executor;
-pub use simulator::Simulator;

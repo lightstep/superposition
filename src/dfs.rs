@@ -1,5 +1,8 @@
+//! Depth-first search of a [KripkeStructure].
+
 use crate::KripkeStructure;
 
+/// Errors that may occur during DFS traversal.
 #[derive(thiserror::Error, Debug, PartialEq)]
 pub enum DfsError {
     #[error("depth exceeded max depth {0}")]
@@ -142,7 +145,7 @@ where
     }
 }
 
-/// Run depth-first-search over a KripkeStructure.
+/// Run depth-first-search over a [KripkeStructure].
 pub fn dfs<KS>(ks: KS, max_depth: Option<usize>) -> Result<(), DfsError>
 where
     KS: KripkeStructure + Copy,
