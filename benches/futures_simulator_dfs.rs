@@ -29,12 +29,11 @@ impl Controller for MyBench {
     #[inline]
     fn on_restart(self, ex: &Executor) -> Self {
         for _ in 0..self.n_processes {
-            ex.spawn(async move {
+            ex.spawn_detach(async move {
                 for _ in 0..self.n_yields_explicit {
                     yield_now().await;
                 }
-            })
-            .detach();
+            });
         }
         self
     }

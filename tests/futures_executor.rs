@@ -11,7 +11,7 @@ fn drives_concurrent_locks_to_completion() {
 
     let counter = Arc::new(AtomicIsize::new(0));
 
-    ex.spawn({
+    ex.spawn_detach({
         let lock = Arc::new(AsyncMutex::new(()));
 
         let ex = ex.clone();
@@ -21,7 +21,7 @@ fn drives_concurrent_locks_to_completion() {
             for _ in 0..1000 {
                 let counter = counter.clone();
                 let lock = lock.clone();
-                ex.spawn({
+                ex.spawn_detach({
                     async move {
                         yield_now().await;
                         {
@@ -34,12 +34,10 @@ fn drives_concurrent_locks_to_completion() {
                         yield_now().await;
                         counter.fetch_add(1, Ordering::SeqCst);
                     }
-                })
-                .detach();
+                });
             }
         }
-    })
-    .detach();
+    });
 
     while ex.choose_any() {}
 
@@ -52,14 +50,14 @@ fn drives_concurrent_locks_to_completion() {
 #[test]
 fn detects_deadlock() {
     let ex = Executor::default();
-    ex.spawn({
+    ex.spawn_detach({
         let m = Arc::new(AsyncMutex::new(()));
         async move {
             let _a = m.lock().await;
             let _b = m.lock().await;
         }
-    })
-    .detach();
+    });
+
     while ex.choose_any() {}
     assert!(
         0 != ex.unfinished_tasks(),
@@ -80,10 +78,9 @@ fn user_can_track_state() {
 
     for i in 0..10 {
         let tracker = tracker.clone();
-        ex.spawn(async move {
+        ex.spawn_detach(async move {
             tracker.lock().unwrap().push(i);
-        })
-        .detach();
+        });
     }
     while ex.choose_any() {}
 
@@ -113,10 +110,9 @@ fn execution_is_deterministic() {
 
         for i in 0..10 {
             let tracker = tracker.clone();
-            ex.spawn(async move {
+            ex.spawn_detach(async move {
                 f(i, tracker).await;
-            })
-            .detach();
+            });
         }
         while ex.choose_any() {}
         assert_eq!(0, ex.unfinished_tasks());
@@ -134,10 +130,9 @@ fn execution_is_deterministic() {
 
         for i in 0..10 {
             let tracker = tracker.clone();
-            ex.spawn(async move {
+            ex.spawn_detach(async move {
                 f(i, tracker).await;
-            })
-            .detach();
+            });
         }
         while ex.choose_any() {}
         assert_eq!(0, ex.unfinished_tasks());

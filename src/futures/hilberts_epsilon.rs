@@ -35,13 +35,12 @@ where
     let flag = Arc::new(AtomicBool::new(false));
 
     // Spawn the background process that may eventually toggle the slot to true.
-    ex.spawn({
+    ex.spawn_detach({
         let flag = flag.clone();
         async move {
             flag.store(true, Ordering::SeqCst);
         }
-    })
-    .detach();
+    });
 
     // Iterate through the choices, returning the first element that is seen after the flag is set
     // to true. If the flag is never set to true, return the last element in the iterator.
