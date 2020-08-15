@@ -23,83 +23,14 @@ use crate::KripkeStructure;
 /// Used for ordering tasks, so that execution is deterministic.
 type TaskId = usize;
 
-/// Documentation from stjepang:
-///
-/// A runnable future, ready for execution.
-///
-/// When a future is internally spawned using `async_task::spawn()` or `async_task::spawn_local()`,
-/// we get back two values:
-///
-/// 1. an `async_task::Task<()>`, which we refer to as a `Runnable`
-/// 2. an `async_task::JoinHandle<T, ()>`, which is wrapped inside a `Task<T>`
-///
-/// Once a `Runnable` is run, it "vanishes" and only reappears when its future is woken. When it's
-/// woken up, its schedule function is called, which means the `Runnable` gets pushed into a task
-/// queue in an executor.
-type Runnable = async_task::Task<TaskId>;
-
-/// Documentation from stjepang:
-///
-/// A spawned future.
-///
-/// Tasks are also futures themselves and yield the output of the spawned future.
-///
-/// When a task is dropped, its gets canceled and won't be polled again. To cancel a task a bit
-/// more gracefully and wait until it stops running, use the [`cancel()`][Task::cancel()] method.
-///
-/// Tasks that panic get immediately canceled. Awaiting a canceled task also causes a panic.
-///
-/// If a task panics, the panic will be thrown by the Ticker::tick() invocation that polled it.
-#[must_use = "tasks get canceled when dropped, use `.detach()` to run them in the background"]
-#[derive(Debug)]
-pub struct Task<T>(Option<async_task::JoinHandle<T, TaskId>>);
-
-impl<T> Task<T> {
-    /// Documentation from stjepang:
-    ///
-    /// Detaches the task to let it keep running in the background.
-    #[inline]
-    pub fn detach(mut self) {
-        self.0.take().unwrap();
-    }
-
-    /// Documentation from stjepang:
-    ///
-    /// Cancels the task and waits for it to stop running.
-    ///
-    /// Returns the task's output if it was completed just before it got canceled, or [`None`] if
-    /// it didn't complete.
-    ///
-    /// While it's possible to simply drop the [`Task`] to cancel it, this is a cleaner way of
-    /// canceling because it also waits for the task to stop running.
-    #[inline]
-    pub async fn cancel(self) -> Option<T> {
-        unreachable!("TODO(rw): double-check this for correctness");
-        // let mut task = self;
-        // let handle = task.0.take().unwrap();
-        // handle.cancel();
-        // handle.await
-    }
+/// A detached future that the executor will run.
+pub struct Task {
+    fut: Pin<Box<dyn Future<Output = ()> + Send + 'static>>,
 }
 
-impl<T> Drop for Task<T> {
-    #[inline]
-    fn drop(&mut self) {
-        if let Some(handle) = &self.0 {
-            handle.cancel();
-        }
-    }
-}
-
-impl<T> Future for Task<T> {
-    type Output = T;
-
-    #[inline]
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match Pin::new(&mut self.0.as_mut().unwrap()).poll(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(output) => Poll::Ready(output.expect("task has failed")),
-        }
+impl std::fmt::Debug for Task {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Task").finish()
     }
 }
 
@@ -117,7 +48,7 @@ pub struct Executor {
     choices_queue: Arc<ConcurrentQueue<TaskId>>,
 
     /// The tasks themselves.
-    tasks: Arc<Mutex<HashMap<TaskId, Runnable>>>,
+    tasks: Arc<Mutex<HashMap<TaskId, Task>>>,
 
     /// Count of unfinished tasks. Used for deadlock detection.
     unfinished_tasks: Arc<AtomicIsize>,
@@ -157,10 +88,7 @@ impl Executor {
     ///
     /// Returns a [`Task`] handle for the spawned future.
     #[inline]
-    pub fn spawn<T: 'static + Send>(
-        &self,
-        future: impl Future<Output = T> + 'static + Send,
-    ) -> Task<T> {
+    pub fn spawn_detach(&self, fut: impl Future<Output = ()> + 'static + Send) {
         // Obtain the next task id, to facilitate deterministic task ordering.
         let task_id = self.task_id.fetch_add(1, Ordering::SeqCst);
 
@@ -168,52 +96,23 @@ impl Executor {
         let unfinished_tasks = self.unfinished_tasks.clone();
         unfinished_tasks.fetch_add(1, Ordering::SeqCst);
 
-        // The function that schedules a runnable task when it gets woken up.
-        let schedule = {
-            let choices = self.choices.clone();
-            let choices_queue = self.choices_queue.clone();
-            let tasks = self.tasks.clone();
-            let accepting_choices = self.accepting_choices.clone();
-            let choices_queue_dirty = self.choices_queue_dirty.clone();
-
-            // NOTE(rw): async-task promises that this won't be called if a task is dropped
-            // before being run. Which, I think, implies that it can't cause an infinite loop
-            // of task creation.
-            move |runnable| {
-                if accepting_choices.load(Ordering::SeqCst) {
-                    tasks.lock().insert(task_id, runnable);
-                    // Try to push the runnable on to the primary choices set, which has the least
-                    // overhead. If that object is already locked, push the runnable to the choices
-                    // queue and mark the choices queue as dirty.
-                    match choices.try_lock() {
-                        Some(mut guard) => {
-                            guard.push(task_id);
-                        }
-                        None => {
-                            choices_queue
-                                .push(task_id)
-                                .expect("internal queue depth too large");
-                            choices_queue_dirty.store(true, Ordering::SeqCst);
-                        }
-                    }
-                }
-            }
-        };
-
         // Wrap the future so that, when it finishes, it decrements the unfinished_tasks counter.
         // (This seems more robust than decrementing the counter in Task's Drop, or at the moment of
         // polling. This is primarily because detached Tasks don't call our Drop when they are
         // dropped.)
         //
         // By using OnReadyFn, this is guaranteed to not enlarge the state space.
-        let future = OnReadyFn::new(future, move || {
+        let fut = OnReadyFn::new(fut, move || {
             unfinished_tasks.fetch_sub(1, Ordering::SeqCst);
         });
 
+        // Box and Pin the future.
+        let fut = Box::pin(fut);
+
         // Create a task, push it into the queue by scheduling it, and return its `Task` handle.
-        let (runnable, handle) = async_task::spawn(future, schedule, task_id);
-        runnable.schedule();
-        Task(Some(handle))
+        let task = Task { fut };
+        self.tasks.lock().insert(task_id, task);
+        self.choices.lock().push(task_id);
     }
 
     /// Proceed one step in the computation by choosing arbitrarily from the available choices.
@@ -248,14 +147,49 @@ impl Executor {
         let task_id = self.choices.lock().swap_remove(idx);
 
         // Fetch the requested task, removing it from the set of tasks.
-        let task = self
+        let mut task = self
             .tasks
             .lock()
             .remove(&task_id)
             .expect("logic error: task missing");
 
-        // Poll the requested task.
-        task.run();
+        // Construct a waker to put this task id back into the choices set, if the executor is
+        // still accepting choices.
+        let waker = waker_fn::waker_fn({
+            let choices = self.choices.clone();
+            let choices_queue = self.choices_queue.clone();
+            let accepting_choices = self.accepting_choices.clone();
+            let choices_queue_dirty = self.choices_queue_dirty.clone();
+
+            move || {
+                if accepting_choices.load(Ordering::SeqCst) {
+                    // Try to push the task id on to the primary choices set, which has the least
+                    // overhead. If that object is already locked, push the runnable to the choices
+                    // queue and mark the choices queue as dirty.
+                    match choices.try_lock() {
+                        Some(mut guard) => {
+                            guard.push(task_id);
+                        }
+                        None => {
+                            choices_queue
+                                .push(task_id)
+                                .expect("internal queue depth too large");
+                            choices_queue_dirty.store(true, Ordering::SeqCst);
+                        }
+                    }
+                }
+            }
+        });
+
+        // Poll the task with the waker.
+        let context = &mut Context::from_waker(&waker);
+        match task.fut.as_mut().poll(context) {
+            Poll::Ready(()) => (),
+            Poll::Pending => {
+                // Put the task back since there is more work to do.
+                self.tasks.lock().insert(task_id, task);
+            }
+        }
 
         // Collect the pending choices, which establishes the invariants needed when calling
         // `choices`.
@@ -291,9 +225,6 @@ impl Executor {
         self.tasks.lock().clear();
 
         // Clear the choices queue.
-        // This should be finite because dropped tasks cannot be scheduled again, according to the
-        // behavior of the async-task library.
-        // NOTE(rw): Re-verify this reasoning.
         if self.choices_queue_dirty.load(Ordering::SeqCst) {
             while self.choices_queue.pop().is_ok() {}
             self.choices_queue_dirty.store(false, Ordering::SeqCst);
@@ -354,13 +285,6 @@ impl Executor {
         // For determinism, sort tasks by the tag, which is the unique task id.
         // TODO(rw): Try replacing the choices vec with a BTreeMap or rank/select data structure.
         choices.sort();
-    }
-}
-
-impl Drop for Executor {
-    fn drop(&mut self) {
-        // TODO(stjepang): Close the local queue and empty it.
-        // TODO(stjepang): Cancel all remaining tasks.
     }
 }
 

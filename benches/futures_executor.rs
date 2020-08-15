@@ -15,12 +15,11 @@ fn f(b: &mut criterion::Bencher, n_spawns: usize, n_yields_explicit: usize) {
 
         for _ in 0..iters {
             for _ in 0..n_spawns {
-                ex.spawn(async move {
+                ex.spawn_detach(async move {
                     for _ in 0..n_yields_explicit {
                         yield_now().await;
                     }
-                })
-                .detach();
+                });
             }
             ex.reset();
         }

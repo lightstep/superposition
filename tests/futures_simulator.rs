@@ -39,12 +39,11 @@ fn simple_interleaving() {
     impl Controller for MyTest {
         fn on_restart(self, ex: &Executor) -> Self {
             for _ in 0..2 {
-                ex.spawn(async move {
+                ex.spawn_detach(async move {
                     for _ in 0..4 {
                         yield_now().await;
                     }
-                })
-                .detach();
+                });
             }
             self
         }
@@ -83,7 +82,7 @@ fn detects_race_condition() {
                 let lock = lock.clone();
                 let a = self.a.clone();
                 let b = self.b.clone();
-                ex.spawn(async move {
+                ex.spawn_detach(async move {
                     if i == 0 {
                         // Intentional bug: this lock is dropped too early, because the guard is
                         // not bound to anything.
@@ -103,8 +102,7 @@ fn detects_race_condition() {
                             b.fetch_add(10, Ordering::SeqCst);
                         }
                     }
-                })
-                .detach();
+                });
             }
 
             self
@@ -149,12 +147,11 @@ fn detects_livelock() {
     impl Controller for MyTest {
         #[inline]
         fn on_restart(self, ex: &Executor) -> Self {
-            ex.spawn(async move {
+            ex.spawn_detach(async move {
                 loop {
                     yield_now().await;
                 }
-            })
-            .detach();
+            });
 
             self
         }
@@ -187,7 +184,7 @@ fn detects_deadlock() {
             let a: Arc<IntrusiveAsyncMutex<()>> = Arc::new(IntrusiveAsyncMutex::new((), false));
             let b: Arc<IntrusiveAsyncMutex<()>> = Arc::new(IntrusiveAsyncMutex::new((), false));
 
-            ex.spawn({
+            ex.spawn_detach({
                 let a = a.clone();
                 let b = b.clone();
 
@@ -200,14 +197,12 @@ fn detects_deadlock() {
 
                     let _guard_b = b.lock().await;
                 }
-            })
-            .detach();
+            });
 
-            ex.spawn(async move {
+            ex.spawn_detach(async move {
                 let _guard_b = b.lock().await;
                 let _guard_a = a.lock().await;
-            })
-            .detach();
+            });
 
             self
         }
@@ -245,14 +240,13 @@ fn choice_operator_efficient_use() {
         fn on_restart(self, ex: &Executor) -> Self {
             let tuples = self.tuples.clone();
             let ex_inner = ex.clone();
-            ex.spawn(async move {
+            ex.spawn_detach(async move {
                 let val =
                     hilberts_epsilon(ex_inner.clone(), iproduct!(0u8..=0, 0i8..=1, 0usize..=2))
                         .await;
 
                 tuples.lock().unwrap().insert(val);
-            })
-            .detach();
+            });
 
             self
         }
@@ -303,7 +297,7 @@ fn choice_operator_inefficient_use() {
         fn on_restart(self, ex: &Executor) -> Self {
             let tuples = self.tuples.clone();
             let ex_inner = ex.clone();
-            ex.spawn(async move {
+            ex.spawn_detach(async move {
                 let a = hilberts_epsilon(ex_inner.clone(), 0u8..=0).await;
                 let b = hilberts_epsilon(ex_inner.clone(), 0i8..=1).await;
                 let c = hilberts_epsilon(ex_inner.clone(), 0usize..=2).await;
@@ -311,8 +305,7 @@ fn choice_operator_inefficient_use() {
                 let val = (a, b, c);
 
                 tuples.lock().unwrap().insert(val);
-            })
-            .detach();
+            });
 
             self
         }
@@ -409,12 +402,11 @@ fn exact_combinatorics_all_trajectories_equals_multinomial_coefficient() {
             #[inline]
             fn on_restart(self, ex: &Executor) -> Self {
                 for _ in 0..self.n_processes {
-                    ex.spawn(async move {
+                    ex.spawn_detach(async move {
                         for _ in 0..self.n_yields_explicit {
                             yield_now().await;
                         }
-                    })
-                    .detach();
+                    });
                 }
 
                 self
