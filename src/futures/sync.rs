@@ -1,3 +1,5 @@
+/// This re-export is deprecated and will be replaced.
+///
 /// Re-export an implementation of an async mutex.
 ///
 /// Note that this Mutex implementation was chosen because it has no dependencies on real time.

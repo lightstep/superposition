@@ -2,6 +2,7 @@
 //!
 //! This code is a heavily modified and simplified fork of the LocalExecutor in stjepang's multitask crate.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
@@ -109,11 +110,14 @@ pub struct Executor {
     task_id: Arc<AtomicUsize>,
 
     /// The task choices.
-    choices: Arc<Mutex<Vec<Runnable>>>,
+    choices: Arc<Mutex<Vec<TaskId>>>,
 
     /// The task choices queue. This is lock-free, which mitigates the deadlocks that can occur
     /// when pushing to the choices Mutex-wrapped Vec.
-    choices_queue: Arc<ConcurrentQueue<Runnable>>,
+    choices_queue: Arc<ConcurrentQueue<TaskId>>,
+
+    /// The tasks themselves.
+    tasks: Arc<Mutex<HashMap<TaskId, Runnable>>>,
 
     /// Count of unfinished tasks. Used for deadlock detection.
     unfinished_tasks: Arc<AtomicIsize>,
@@ -135,6 +139,7 @@ impl Default for Executor {
             task_id: Arc::new(AtomicUsize::new(0)),
             choices: Arc::new(Mutex::new(Vec::new())),
             choices_queue: Arc::new(ConcurrentQueue::unbounded()),
+            tasks: Arc::new(Mutex::new(HashMap::new())),
             unfinished_tasks: Arc::new(AtomicIsize::new(0)),
             accepting_choices: Arc::new(AtomicBool::new(true)),
             choices_queue_dirty: Arc::new(AtomicBool::new(false)),
@@ -167,6 +172,7 @@ impl Executor {
         let schedule = {
             let choices = self.choices.clone();
             let choices_queue = self.choices_queue.clone();
+            let tasks = self.tasks.clone();
             let accepting_choices = self.accepting_choices.clone();
             let choices_queue_dirty = self.choices_queue_dirty.clone();
 
@@ -174,18 +180,21 @@ impl Executor {
             // before being run. Which, I think, implies that it can't cause an infinite loop
             // of task creation.
             move |runnable| {
-                // Try to push the runnable on to the primary choices set, which has the least
-                // overhead. If that object is already locked, push the runnable to the choices
-                // queue and mark the choices queue as dirty.
-                match choices.try_lock() {
-                    Some(mut guard) if accepting_choices.load(Ordering::SeqCst) => {
-                        guard.push(runnable);
-                    }
-                    Some(_) | None => {
-                        choices_queue
-                            .push(runnable)
-                            .expect("internal queue depth too large");
-                        choices_queue_dirty.store(true, Ordering::SeqCst);
+                if accepting_choices.load(Ordering::SeqCst) {
+                    tasks.lock().insert(task_id, runnable);
+                    // Try to push the runnable on to the primary choices set, which has the least
+                    // overhead. If that object is already locked, push the runnable to the choices
+                    // queue and mark the choices queue as dirty.
+                    match choices.try_lock() {
+                        Some(mut guard) => {
+                            guard.push(task_id);
+                        }
+                        None => {
+                            choices_queue
+                                .push(task_id)
+                                .expect("internal queue depth too large");
+                            choices_queue_dirty.store(true, Ordering::SeqCst);
+                        }
                     }
                 }
             }
@@ -235,11 +244,18 @@ impl Executor {
         // out-of-band (such as by using real time or background threads).
         debug_assert_eq!(0, self.choices_queue.len());
 
-        // Fetch the requested task, removing it from the set of choices.
-        let r = self.choices.lock().swap_remove(idx);
+        // Fetch the requested task id, removing it from the set of choices.
+        let task_id = self.choices.lock().swap_remove(idx);
+
+        // Fetch the requested task, removing it from the set of tasks.
+        let task = self
+            .tasks
+            .lock()
+            .remove(&task_id)
+            .expect("logic error: task missing");
 
         // Poll the requested task.
-        r.run();
+        task.run();
 
         // Collect the pending choices, which establishes the invariants needed when calling
         // `choices`.
@@ -270,6 +286,9 @@ impl Executor {
 
         // Clear the existing choices.
         self.choices.lock().clear();
+
+        // Clear the existing tasks.
+        self.tasks.lock().clear();
 
         // Clear the choices queue.
         // This should be finite because dropped tasks cannot be scheduled again, according to the
@@ -334,7 +353,7 @@ impl Executor {
 
         // For determinism, sort tasks by the tag, which is the unique task id.
         // TODO(rw): Try replacing the choices vec with a BTreeMap or rank/select data structure.
-        choices.sort_by_key(|t| *t.tag());
+        choices.sort();
     }
 }
 

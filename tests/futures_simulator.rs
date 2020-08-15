@@ -7,7 +7,7 @@ use superposition::{
     dfs::{dfs, Dfs, DfsError},
     futures::{
         hilberts_epsilon::{hilberts_epsilon, iproduct},
-        sync::AsyncMutex,
+        sync::IntrusiveAsyncMutex,
         utils::yield_now,
         Controller, Executor, Simulator,
     },
@@ -77,7 +77,7 @@ fn detects_race_condition() {
             self.a.store(10, Ordering::SeqCst);
             self.b.store(10, Ordering::SeqCst);
 
-            let lock: Arc<AsyncMutex<_>> = Arc::new(AsyncMutex::new(()));
+            let lock: Arc<IntrusiveAsyncMutex<_>> = Arc::new(IntrusiveAsyncMutex::new((), false));
 
             for i in 0usize..4 {
                 let lock = lock.clone();
@@ -184,8 +184,8 @@ fn detects_deadlock() {
     impl Controller for MyTest {
         #[inline]
         fn on_restart(self, ex: &Executor) -> Self {
-            let a: Arc<AsyncMutex<()>> = Default::default();
-            let b: Arc<AsyncMutex<()>> = Default::default();
+            let a: Arc<IntrusiveAsyncMutex<()>> = Arc::new(IntrusiveAsyncMutex::new((), false));
+            let b: Arc<IntrusiveAsyncMutex<()>> = Arc::new(IntrusiveAsyncMutex::new((), false));
 
             ex.spawn({
                 let a = a.clone();
