@@ -6,6 +6,9 @@ pub use controller::Controller;
 mod executor;
 pub use executor::{Executor, Task};
 
+mod choice_stream;
+pub use choice_stream::ChoiceStream;
+
 pub mod hilberts_epsilon;
 pub mod on_ready_fn;
 
