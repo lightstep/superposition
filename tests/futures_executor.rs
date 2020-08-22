@@ -1,27 +1,26 @@
-use std::sync::{
-    atomic::{AtomicIsize, Ordering},
-    Arc,
-};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use superposition::futures::{sync::AsyncMutex, utils::yield_now, Executor};
 
 #[test]
 fn drives_concurrent_locks_to_completion() {
-    let ex = Executor::default();
+    let mut ex = Executor::default();
+    let spawner = ex.spawner();
 
-    let counter = Arc::new(AtomicIsize::new(0));
+    let counter = Rc::new(RefCell::new(0_isize));
 
-    ex.spawn_detach({
-        let lock = Arc::new(AsyncMutex::new(()));
+    spawner.spawn_detach({
+        let lock = Rc::new(AsyncMutex::new(()));
 
-        let ex = ex.clone();
+        let spawner = spawner.clone();
         let counter = counter.clone();
 
         async move {
             for _ in 0..1000 {
                 let counter = counter.clone();
                 let lock = lock.clone();
-                ex.spawn_detach({
+                spawner.spawn_detach({
                     async move {
                         yield_now().await;
                         {
@@ -32,7 +31,7 @@ fn drives_concurrent_locks_to_completion() {
                             let _z = lock.lock().await;
                         }
                         yield_now().await;
-                        counter.fetch_add(1, Ordering::SeqCst);
+                        *counter.borrow_mut() += 1;
                     }
                 });
             }
@@ -44,14 +43,16 @@ fn drives_concurrent_locks_to_completion() {
     assert_eq!(0, ex.choices());
     assert_eq!(0, ex.unfinished_tasks());
 
-    assert_eq!(1000, counter.load(Ordering::SeqCst));
+    let got = *counter.borrow();
+    assert_eq!(1000, got);
 }
 
 #[test]
 fn detects_deadlock() {
-    let ex = Executor::default();
-    ex.spawn_detach({
-        let m = Arc::new(AsyncMutex::new(()));
+    let mut ex = Executor::default();
+    let spawner = ex.spawner();
+    spawner.spawn_detach({
+        let m = Rc::new(AsyncMutex::new(()));
         async move {
             let _a = m.lock().await;
             let _b = m.lock().await;
@@ -65,79 +66,83 @@ fn detects_deadlock() {
     );
 }
 
-#[test]
-fn impls_send_and_sync() {
-    assert!(impls::impls!(Executor: Send & Sync));
-}
+// TODO(rw): Decide which of these impls, if any, Executor and Spawner should have.
+//#[test]
+//fn impls_send_and_sync() {
+//    assert!(impls::impls!(Executor: Send & Sync));
+//}
 
 #[test]
 fn user_can_track_state() {
-    let tracker = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let tracker = Rc::new(RefCell::new(Vec::new()));
 
-    let ex = Executor::default();
+    let mut ex = Executor::default();
+    let spawner = ex.spawner();
 
     for i in 0..10 {
         let tracker = tracker.clone();
-        ex.spawn_detach(async move {
-            tracker.lock().unwrap().push(i);
+        spawner.spawn_detach(async move {
+            tracker.borrow_mut().push(i);
         });
     }
     while ex.choose_any() {}
 
     let want: Vec<usize> = (0..10).collect();
     let got = {
-        tracker.lock().unwrap().sort();
-        tracker.lock().unwrap().clone()
+        tracker.borrow_mut().sort();
+        tracker.borrow_mut().clone()
     };
     assert_eq!(want, got);
 }
 
 #[test]
 fn execution_is_deterministic() {
-    async fn f(i: usize, tracker: Arc<std::sync::Mutex<Vec<usize>>>) {
+    async fn f(i: usize, tracker: Rc<RefCell<Vec<usize>>>) {
         yield_now().await;
-        tracker.lock().unwrap().push(i);
+        tracker.borrow_mut().push(i);
         yield_now().await;
-        tracker.lock().unwrap().push(i);
+        tracker.borrow_mut().push(i);
         yield_now().await;
-        tracker.lock().unwrap().push(i);
+        tracker.borrow_mut().push(i);
         yield_now().await;
     }
     let want = {
-        let tracker: Arc<std::sync::Mutex<Vec<usize>>> = Default::default();
+        let tracker: Rc<RefCell<Vec<usize>>> = Default::default();
 
-        let ex = Executor::default();
+        let mut ex = Executor::default();
+        let spawner = ex.spawner();
 
         for i in 0..10 {
             let tracker = tracker.clone();
-            ex.spawn_detach(async move {
+            spawner.spawn_detach(async move {
                 f(i, tracker).await;
             });
         }
         while ex.choose_any() {}
         assert_eq!(0, ex.unfinished_tasks());
 
-        let ret = tracker.lock().unwrap().clone();
+        let ret = tracker.borrow_mut().clone();
         ret
     };
 
     assert_eq!(30, want.len());
 
     for _ in 0..10 {
-        let tracker: Arc<std::sync::Mutex<Vec<usize>>> = Default::default();
+        let tracker: Rc<RefCell<Vec<usize>>> = Default::default();
 
-        let ex = Executor::default();
+        let mut ex = Executor::default();
+        let spawner = ex.spawner();
 
         for i in 0..10 {
             let tracker = tracker.clone();
-            ex.spawn_detach(async move {
+            spawner.spawn_detach(async move {
                 f(i, tracker).await;
             });
         }
         while ex.choose_any() {}
         assert_eq!(0, ex.unfinished_tasks());
 
-        let got = tracker.lock().unwrap();
+        let got = tracker.borrow_mut();
 
         assert_eq!(want, *got);
     }
