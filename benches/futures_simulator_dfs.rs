@@ -48,7 +48,7 @@ impl Controller for MyBench {
 // TODO(rw): Reuse DFS state to minimize spurious allocations.
 fn f(b: &mut criterion::Bencher, n_processes: usize, n_yields_explicit: usize) {
     b.iter_custom(move |iters| {
-        let mut sim = <Simulator<MyBench>>::new(MyBench::new(n_processes, n_yields_explicit));
+        let mut sim = Simulator::new(MyBench::new(n_processes, n_yields_explicit));
 
         let mut it = Dfs::new(&mut sim, None);
 

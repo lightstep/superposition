@@ -10,25 +10,25 @@ use super::executor::{Executor, Spawner};
 pub trait Controller {
     /// Triggers on every state transition.
     ///
-    /// Example uses:
+    /// # Example uses:
     ///
-    /// Storing state-specific metadata in a Vec, to be analyzed at the end of a trajectory.
-    /// Checking state-specific invariants.
+    /// - Storing state-specific metadata in a Vec, to be analyzed at the end of a trajectory.
+    /// - Checking state-specific invariants.
     fn on_transition(&mut self);
 
     /// Triggers when the successor set is empty.
     ///
     /// Example uses:
     ///
-    /// Checking an entire history of state metadata for correctness.
-    /// Accumulating counts of the number of trajectories evaluated.
+    /// - Checking an entire history of state metadata for correctness.
+    /// - Accumulating counts of the number of trajectories evaluated.
     fn on_end_of_trajectory(&mut self, ex: &Executor);
 
     /// Triggers when a trajectory is reset.
     ///
-    /// Example uses:
+    /// # Example uses:
     ///
-    /// Spawning async tasks.
-    /// Resetting variables that hold data used by the simulation.
+    /// - Spawning async tasks.
+    /// - Resetting variables that hold data used by the simulation.
     fn on_restart(&mut self, spawner: &Spawner);
 }

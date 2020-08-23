@@ -32,6 +32,13 @@ struct Inner {
     choices_dirty: bool,
 }
 
+/// A spawner for launching new tasks.
+///
+/// Use this when a user running a simulation should be prevented from modifying other Executor
+/// state.
+///
+/// In the future, we may have other similar types that are used for reporting on, say, unfinished
+/// tasks.
 #[derive(Clone)]
 pub struct Spawner {
     inner: Rc<RefCell<Inner>>,
@@ -144,7 +151,8 @@ impl Executor {
             let inner = self.inner.clone();
             let task_id = task.id;
             move || {
-                // TODO(rw): Is it always true that if this guard fails, the simulation is over?
+                // TODO(rw): When this conditional is false, user code may have a problem. Perhaps
+                // we can alert them that this is the case.
                 if let Ok(mut g) = inner.try_borrow_mut() {
                     g.choices.push(task_id);
                     g.choices_dirty = true;

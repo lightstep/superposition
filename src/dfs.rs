@@ -87,7 +87,7 @@ pub struct Dfs<'a, KS, L, I> {
 
 impl<'a, KS> Dfs<'a, KS, KS::Label, KS::LabelIterator>
 where
-    KS: KripkeStructure + 'a,
+    KS: KripkeStructure,
     Self: Iterator<Item = Result<(), DfsError>>,
 {
     #[inline]
@@ -148,9 +148,9 @@ where
 }
 
 /// Run depth-first-search over a [KripkeStructure].
-pub fn dfs<'a, KS>(ks: &'a mut KS, max_depth: Option<usize>) -> Result<(), DfsError>
+pub fn dfs<KS>(ks: &mut KS, max_depth: Option<usize>) -> Result<(), DfsError>
 where
-    KS: KripkeStructure + 'a,
+    KS: KripkeStructure,
 {
     Dfs::new(ks, max_depth).run_to_completion()
 }

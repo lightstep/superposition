@@ -20,7 +20,7 @@ fn minimal_simulation() {
         fn on_end_of_trajectory(&mut self, _: &Executor) {}
     }
 
-    let mut sim = <Simulator<MyTest>>::new(MyTest);
+    let mut sim = Simulator::new(MyTest);
 
     Dfs::new(&mut sim, None).run_to_completion().unwrap();
 }
