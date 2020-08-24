@@ -1,5 +1,7 @@
+use futures_lite::StreamExt;
+
 use std::sync::{
-    atomic::{AtomicIsize, Ordering},
+    atomic::{AtomicIsize, AtomicUsize, Ordering},
     Arc,
 };
 
@@ -9,7 +11,7 @@ use superposition::{
         hilberts_epsilon::{hilberts_epsilon, iproduct},
         sync::IntrusiveAsyncMutex,
         utils::yield_now,
-        Controller, Executor, Simulator,
+        ChoiceStream, Controller, Executor, Simulator,
     },
 };
 
@@ -341,6 +343,60 @@ fn choice_operator_inefficient_use() {
     );
     assert_eq!(6, tuples.len());
     assert!(ret.num_trajectories >= 50);
+}
+
+#[test]
+fn choice_stream_validity() {
+    #[derive(Default)]
+    struct TestState {
+        seen_choices: Vec<usize>,
+        num_trajectories: usize,
+
+        /// The choice made by the current trajectory, collected at the end.
+        this_choice: Arc<AtomicUsize>,
+    };
+
+    impl Controller for TestState {
+        fn on_restart(self, ex: &Executor) -> Self {
+            let mut stream = ChoiceStream::new(ex, 0..5); // Choose 0 through 4.
+            let this_choice = self.this_choice.clone();
+
+            // Enqueue a task that reads a single value from the ChoiceStream.
+            ex.spawn_detach(async move {
+                let choice: usize = stream.next().await.unwrap();
+                this_choice.store(choice, Ordering::SeqCst);
+
+                // The stream should yield only a single choice.
+                assert_eq!(stream.next().await, None)
+            });
+
+            self
+        }
+
+        fn on_transition(self) -> Self {
+            self
+        }
+
+        fn on_end_of_trajectory(mut self, ex: &Executor) -> Self {
+            assert_eq!(0, ex.unfinished_tasks());
+
+            // Count the choice at the trajectory's end.
+            let choice = self.this_choice.load(Ordering::SeqCst);
+            self.seen_choices.push(choice);
+
+            self.num_trajectories += 1;
+            self
+        }
+    }
+
+    let sim = Simulator::new(TestState::default());
+    dfs(&sim, None).unwrap();
+
+    let state: TestState = sim.take_controller();
+    let mut choices: Vec<usize> = state.seen_choices.iter().copied().collect();
+    choices.sort_unstable();
+    assert_eq!(choices, vec![0, 1, 2, 3, 4]);
+    assert_eq!(state.num_trajectories, 5);
 }
 
 /// Tests that the trajectories in the system exactly match the expected counts.
