@@ -1,13 +1,7 @@
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use std::{
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
-    time::Instant,
-};
+use std::time::Instant;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 
@@ -15,7 +9,7 @@ use superposition::{dfs::Dfs, KripkeStructure};
 
 #[derive(Default, Clone)]
 struct MyBench {
-    depth: Arc<AtomicUsize>,
+    depth: usize,
 
     max_depth: usize,
     breadth: usize,
@@ -24,25 +18,25 @@ struct MyBench {
 impl MyBench {
     fn new(max_depth: usize, breadth: usize) -> Self {
         Self {
-            depth: Arc::new(AtomicUsize::new(0)),
+            depth: 0,
             max_depth,
             breadth,
         }
     }
 }
 
-impl KripkeStructure for &MyBench {
+impl KripkeStructure for MyBench {
     type Label = usize;
     type LabelIterator = std::ops::Range<usize>;
 
     #[inline]
-    fn transition(self, _: Self::Label) {
-        self.depth.fetch_add(1, Ordering::SeqCst);
+    fn transition(&mut self, _: Self::Label) {
+        self.depth += 1;
     }
 
     #[inline]
-    fn successors(self) -> Option<Self::LabelIterator> {
-        if self.depth.load(Ordering::SeqCst) < self.max_depth {
+    fn successors(&mut self) -> Option<Self::LabelIterator> {
+        if self.depth < self.max_depth {
             Some(0..self.breadth)
         } else {
             None
@@ -50,16 +44,16 @@ impl KripkeStructure for &MyBench {
     }
 
     #[inline]
-    fn restart(self) {
-        self.depth.store(0, Ordering::SeqCst);
+    fn restart(&mut self) {
+        self.depth = 0;
     }
 }
 
 fn f(b: &mut criterion::Bencher, max_depth: usize, breadth: usize) {
     b.iter_custom(move |iters| {
-        let sim = MyBench::new(max_depth, breadth);
+        let mut sim = MyBench::new(max_depth, breadth);
 
-        let mut it = Dfs::new(&sim, None);
+        let mut it = Dfs::new(&mut sim, None);
 
         let start = Instant::now();
         for _ in 0..iters {

@@ -7,15 +7,12 @@ description = "Verify concurrent behavior of real code using finite-space model 
 publish = false
 
 [dependencies]
-concurrent-queue = "1"
 futures-intrusive = { version = "0.3", default-features = false, features = [ "alloc" ] }
 futures-lite = "0.1"
-futures-util = "*"
+futures-util = "0.3"
 itertools = "0.9"
 pin-project-lite = "0.1"
-spin = "0.5"
 thiserror = "1"
-waker-fn = "1"
 
 [dev-dependencies]
 criterion = "0.3.3"
@@ -25,6 +22,9 @@ mimalloc = { version = "0.1", default-features = false }
 
 [profile.test]
 opt-level = 2
+
+[profile.bench]
+debug = true
 
 [[bench]]
 name = "dfs_overhead"

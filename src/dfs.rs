@@ -19,9 +19,9 @@ struct PathState<T, I> {
     items: Vec<T>,
 }
 impl<T, I> PathState<T, I> {
-    fn new() -> Self {
-        let iters = Vec::new();
-        let items = Vec::new();
+    fn new_with_capacity(cap: usize) -> Self {
+        let iters = Vec::with_capacity(cap);
+        let items = Vec::with_capacity(cap);
         Self { iters, items }
     }
 
@@ -78,20 +78,21 @@ impl<T, I> PathState<T, I> {
 }
 
 /// An iterator to execute depth-first-search over a KripkeStructure.
-pub struct Dfs<KS, L, I> {
-    ks: KS,
+pub struct Dfs<'a, KS, L, I> {
+    ks: &'a mut KS,
     max_depth: Option<usize>,
 
     stack: PathState<L, I>,
 }
 
-impl<KS> Dfs<KS, KS::Label, KS::LabelIterator>
+impl<'a, KS> Dfs<'a, KS, KS::Label, KS::LabelIterator>
 where
-    KS: KripkeStructure + Copy,
+    KS: KripkeStructure,
     Self: Iterator<Item = Result<(), DfsError>>,
 {
-    pub fn new(ks: KS, max_depth: Option<usize>) -> Self {
-        let mut stack = PathState::new();
+    #[inline]
+    pub fn new(ks: &'a mut KS, max_depth: Option<usize>) -> Self {
+        let mut stack = PathState::new_with_capacity(64);
         ks.restart();
         stack.append(ks.successors());
         Self {
@@ -101,6 +102,7 @@ where
         }
     }
 
+    #[inline]
     pub fn run_to_completion(&mut self) -> Result<(), DfsError> {
         self.collect()
     }
@@ -114,9 +116,9 @@ where
     }
 }
 
-impl<KS> Iterator for Dfs<KS, KS::Label, KS::LabelIterator>
+impl<KS> Iterator for Dfs<'_, KS, KS::Label, KS::LabelIterator>
 where
-    KS: KripkeStructure + Copy,
+    KS: KripkeStructure,
 {
     type Item = Result<(), DfsError>;
 
@@ -146,9 +148,9 @@ where
 }
 
 /// Run depth-first-search over a [KripkeStructure].
-pub fn dfs<KS>(ks: KS, max_depth: Option<usize>) -> Result<(), DfsError>
+pub fn dfs<KS>(ks: &mut KS, max_depth: Option<usize>) -> Result<(), DfsError>
 where
-    KS: KripkeStructure + Copy,
+    KS: KripkeStructure,
 {
     Dfs::new(ks, max_depth).run_to_completion()
 }

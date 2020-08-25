@@ -1,21 +1,34 @@
 //! Defines the Controller trait that provides user hooks.
 
-use super::executor::Executor;
+use super::executor::{Executor, Spawner};
 
 /// Events used to track behavior and manage state during a simulation.
 ///
 /// The primary purpose of this trait is for setting up and tearing down user-provided async code,
-/// so that the code can be run repeatedly.
-///
-/// Each method should move `self`.
-/// This is to provide flexibility and efficiency for managing state, such as for a local allocator.
+/// so that the code can be simulated repeatedly. This is also where allocations in a simulation
+/// can be reused.
 pub trait Controller {
     /// Triggers on every state transition.
-    fn on_transition(self) -> Self;
+    ///
+    /// # Example uses:
+    ///
+    /// - Storing state-specific metadata in a Vec, to be analyzed at the end of a trajectory.
+    /// - Checking state-specific invariants.
+    fn on_transition(&mut self);
 
     /// Triggers when the successor set is empty.
-    fn on_end_of_trajectory(self, ex: &Executor) -> Self;
+    ///
+    /// Example uses:
+    ///
+    /// - Checking an entire history of state metadata for correctness.
+    /// - Accumulating counts of the number of trajectories evaluated.
+    fn on_end_of_trajectory(&mut self, ex: &Executor);
 
     /// Triggers when a trajectory is reset.
-    fn on_restart(self, ex: &Executor) -> Self;
+    ///
+    /// # Example uses:
+    ///
+    /// - Spawning async tasks.
+    /// - Resetting variables that hold data used by the simulation.
+    fn on_restart(&mut self, spawner: &Spawner);
 }

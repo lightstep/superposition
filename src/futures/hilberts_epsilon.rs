@@ -1,10 +1,8 @@
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use super::utils::yield_now;
-use super::Executor;
+use super::Spawner;
 
 // Re-export the iproduct macro from itertools.
 //
@@ -27,18 +25,18 @@ pub use itertools::iproduct;
 /// every option, then wait on a "select" operation to choose the first one that is ready. However,
 /// that probably causes much higher memory usage, and wil not be practical with large choice sets.
 #[inline]
-pub async fn hilberts_epsilon<I, X>(ex: Executor, mut choices: I) -> X
+pub async fn hilberts_epsilon<I, X>(ex: Spawner, mut choices: I) -> X
 where
     I: Iterator<Item = X> + Send + 'static,
     X: Send + Copy + 'static,
 {
-    let flag = Arc::new(AtomicBool::new(false));
+    let flag = Rc::new(RefCell::new(false));
 
     // Spawn the background process that may eventually toggle the slot to true.
     ex.spawn_detach({
         let flag = flag.clone();
         async move {
-            flag.store(true, Ordering::SeqCst);
+            *flag.borrow_mut() = true;
         }
     });
 
@@ -47,7 +45,7 @@ where
     let mut last_elem = choices.next().expect("choice set must be nonempty");
     for elem in choices {
         yield_now().await;
-        if flag.load(Ordering::SeqCst) {
+        if *flag.borrow() {
             return last_elem;
         }
         last_elem = elem;

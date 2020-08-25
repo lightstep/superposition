@@ -1,9 +1,5 @@
 use futures_lite::StreamExt;
-
-use std::sync::{
-    atomic::{AtomicIsize, AtomicUsize, Ordering},
-    Arc,
-};
+use std::{cell::RefCell, rc::Rc};
 
 use superposition::{
     dfs::{dfs, Dfs, DfsError},
@@ -11,7 +7,7 @@ use superposition::{
         hilberts_epsilon::{hilberts_epsilon, iproduct},
         sync::IntrusiveAsyncMutex,
         utils::yield_now,
-        ChoiceStream, Controller, Executor, Simulator,
+        ChoiceStream, Controller, Executor, Simulator, Spawner,
     },
 };
 
@@ -19,119 +15,103 @@ use superposition::{
 fn minimal_simulation() {
     struct MyTest;
     impl Controller for MyTest {
-        fn on_restart(self, _: &Executor) -> Self {
-            self
-        }
-        fn on_transition(self) -> Self {
-            self
-        }
-        fn on_end_of_trajectory(self, _: &Executor) -> Self {
-            self
-        }
+        fn on_restart(&mut self, _: &Spawner) {}
+        fn on_transition(&mut self) {}
+        fn on_end_of_trajectory(&mut self, _: &Executor) {}
     }
 
-    let sim = <Simulator<MyTest>>::new(MyTest);
+    let mut sim = Simulator::new(MyTest);
 
-    Dfs::new(&sim, None).run_to_completion().unwrap();
+    Dfs::new(&mut sim, None).run_to_completion().unwrap();
 }
 
 #[test]
 fn simple_interleaving() {
     struct MyTest;
     impl Controller for MyTest {
-        fn on_restart(self, ex: &Executor) -> Self {
+        fn on_restart(&mut self, spawner: &Spawner) {
             for _ in 0..2 {
-                ex.spawn_detach(async move {
+                spawner.spawn_detach(async move {
                     for _ in 0..4 {
                         yield_now().await;
                     }
                 });
             }
-            self
         }
-        fn on_transition(self) -> Self {
-            self
-        }
-        fn on_end_of_trajectory(self, ex: &Executor) -> Self {
+        fn on_transition(&mut self) {}
+        fn on_end_of_trajectory(&mut self, ex: &Executor) {
             assert_eq!(0, ex.unfinished_tasks());
-            self
         }
     }
-    let sim = <Simulator<MyTest>>::new(MyTest);
+    let mut sim = <Simulator<MyTest>>::new(MyTest);
 
-    dfs(&sim, None).unwrap();
+    dfs(&mut sim, None).unwrap();
 }
 
 #[test]
 fn detects_race_condition() {
     #[derive(Default)]
     struct MyTest {
-        a: Arc<AtomicIsize>,
-        b: Arc<AtomicIsize>,
+        a: Rc<RefCell<isize>>,
+        b: Rc<RefCell<isize>>,
         num_failed: usize,
         num_trajectories: usize,
     };
 
     impl Controller for MyTest {
         #[inline]
-        fn on_restart(self, ex: &Executor) -> Self {
-            self.a.store(10, Ordering::SeqCst);
-            self.b.store(10, Ordering::SeqCst);
+        fn on_restart(&mut self, spawner: &Spawner) {
+            *self.a.borrow_mut() = 10;
+            *self.b.borrow_mut() = 10;
 
-            let lock: Arc<IntrusiveAsyncMutex<_>> = Arc::new(IntrusiveAsyncMutex::new((), false));
+            let lock: Rc<IntrusiveAsyncMutex<_>> = Rc::new(IntrusiveAsyncMutex::new((), false));
 
             for i in 0usize..4 {
                 let lock = lock.clone();
                 let a = self.a.clone();
                 let b = self.b.clone();
-                ex.spawn_detach(async move {
+                spawner.spawn_detach(async move {
                     if i == 0 {
                         // Intentional bug: this lock is dropped too early, because the guard is
                         // not bound to anything.
                         let _ = lock.lock().await;
 
-                        if a.load(Ordering::SeqCst) >= 10 {
+                        if *a.borrow() >= 10 {
                             yield_now().await;
-                            a.fetch_sub(10, Ordering::SeqCst);
-                            b.fetch_add(10, Ordering::SeqCst);
+                            *a.borrow_mut() -= 10;
+                            *b.borrow_mut() += 10;
                         }
                     } else {
                         let _a = lock.lock().await;
 
-                        if a.load(Ordering::SeqCst) >= 10 {
+                        if *a.borrow() >= 10 {
                             yield_now().await;
-                            a.fetch_sub(10, Ordering::SeqCst);
-                            b.fetch_add(10, Ordering::SeqCst);
+                            *a.borrow_mut() -= 10;
+                            *b.borrow_mut() += 10;
                         }
                     }
                 });
             }
-
-            self
         }
         #[inline]
-        fn on_transition(self) -> Self {
-            self
-        }
+        fn on_transition(&mut self) {}
         #[inline]
-        fn on_end_of_trajectory(mut self, ex: &Executor) -> Self {
+        fn on_end_of_trajectory(&mut self, ex: &Executor) {
             assert_eq!(0, ex.unfinished_tasks());
 
-            let a_final = self.a.load(Ordering::SeqCst);
-            let b_final = self.b.load(Ordering::SeqCst);
+            let a_final = *self.a.borrow();
+            let b_final = *self.b.borrow();
 
             if !(a_final == 0 && b_final == 20) {
                 self.num_failed += 1;
             }
 
             self.num_trajectories += 1;
-
-            self
         }
     }
-    let sim = <Simulator<MyTest>>::new(MyTest::default());
+    let mut sim = <Simulator<MyTest>>::new(MyTest::default());
 
-    dfs(&sim, None).unwrap();
+    dfs(&mut sim, None).unwrap();
 
     let ret = sim.take_controller();
     assert!(ret.num_failed >= 1, "some trajectories should have failed");
@@ -148,27 +128,21 @@ fn detects_livelock() {
 
     impl Controller for MyTest {
         #[inline]
-        fn on_restart(self, ex: &Executor) -> Self {
-            ex.spawn_detach(async move {
+        fn on_restart(&mut self, spawner: &Spawner) {
+            spawner.spawn_detach(async move {
                 loop {
                     yield_now().await;
                 }
             });
-
-            self
         }
         #[inline]
-        fn on_transition(self) -> Self {
-            self
-        }
+        fn on_transition(&mut self) {}
         #[inline]
-        fn on_end_of_trajectory(self, _: &Executor) -> Self {
-            self
-        }
+        fn on_end_of_trajectory(&mut self, _: &Executor) {}
     }
-    let sim = <Simulator<MyTest>>::new(MyTest::default());
+    let mut sim = <Simulator<MyTest>>::new(MyTest::default());
 
-    let ret = dfs(&sim, Some(100));
+    let ret = dfs(&mut sim, Some(100));
 
     assert_eq!(ret, Err(DfsError::MaxDepthExceeded(101)));
 }
@@ -182,11 +156,11 @@ fn detects_deadlock() {
 
     impl Controller for MyTest {
         #[inline]
-        fn on_restart(self, ex: &Executor) -> Self {
-            let a: Arc<IntrusiveAsyncMutex<()>> = Arc::new(IntrusiveAsyncMutex::new((), false));
-            let b: Arc<IntrusiveAsyncMutex<()>> = Arc::new(IntrusiveAsyncMutex::new((), false));
+        fn on_restart(&mut self, spawner: &Spawner) {
+            let a: Rc<IntrusiveAsyncMutex<()>> = Rc::new(IntrusiveAsyncMutex::new((), false));
+            let b: Rc<IntrusiveAsyncMutex<()>> = Rc::new(IntrusiveAsyncMutex::new((), false));
 
-            ex.spawn_detach({
+            spawner.spawn_detach({
                 let a = a.clone();
                 let b = b.clone();
 
@@ -201,28 +175,23 @@ fn detects_deadlock() {
                 }
             });
 
-            ex.spawn_detach(async move {
+            spawner.spawn_detach(async move {
                 let _guard_b = b.lock().await;
                 let _guard_a = a.lock().await;
             });
-
-            self
         }
         #[inline]
-        fn on_transition(self) -> Self {
-            self
-        }
+        fn on_transition(&mut self) {}
         #[inline]
-        fn on_end_of_trajectory(mut self, ex: &Executor) -> Self {
+        fn on_end_of_trajectory(&mut self, ex: &Executor) {
             if ex.unfinished_tasks() >= 1 {
                 self.num_trajectories_with_unfinished_tasks += 1;
             }
-            self
         }
     }
-    let sim = <Simulator<MyTest>>::new(MyTest::default());
+    let mut sim = <Simulator<MyTest>>::new(MyTest::default());
 
-    dfs(&sim, Some(100)).unwrap();
+    dfs(&mut sim, Some(100)).unwrap();
 
     let c = sim.take_controller();
 
@@ -233,41 +202,39 @@ fn detects_deadlock() {
 fn choice_operator_efficient_use() {
     #[derive(Default)]
     struct MyTest {
-        tuples: Arc<std::sync::Mutex<std::collections::BTreeSet<(u8, i8, usize)>>>,
+        tuples: Rc<std::sync::Mutex<std::collections::BTreeSet<(u8, i8, usize)>>>,
         num_trajectories: usize,
     };
 
     impl Controller for MyTest {
         #[inline]
-        fn on_restart(self, ex: &Executor) -> Self {
+        fn on_restart(&mut self, spawner: &Spawner) {
             let tuples = self.tuples.clone();
-            let ex_inner = ex.clone();
-            ex.spawn_detach(async move {
-                let val =
-                    hilberts_epsilon(ex_inner.clone(), iproduct!(0u8..=0, 0i8..=1, 0usize..=2))
-                        .await;
+            let spawner_inner = spawner.clone();
+            spawner.spawn_detach(async move {
+                let val = hilberts_epsilon(
+                    spawner_inner.clone(),
+                    iproduct!(0u8..=0, 0i8..=1, 0usize..=2),
+                )
+                .await;
 
                 tuples.lock().unwrap().insert(val);
             });
+        }
 
-            self
-        }
         #[inline]
-        fn on_transition(self) -> Self {
-            self
-        }
+        fn on_transition(&mut self) {}
+
         #[inline]
-        fn on_end_of_trajectory(mut self, ex: &Executor) -> Self {
+        fn on_end_of_trajectory(&mut self, ex: &Executor) {
             assert_eq!(0, ex.unfinished_tasks());
 
             self.num_trajectories += 1;
-
-            self
         }
     }
-    let sim = <Simulator<MyTest>>::new(MyTest::default());
+    let mut sim = <Simulator<MyTest>>::new(MyTest::default());
 
-    dfs(&sim, None).unwrap();
+    dfs(&mut sim, None).unwrap();
 
     let ret = sim.take_controller();
     let tuples: Vec<(_, _, _)> = ret.tuples.lock().unwrap().iter().copied().collect();
@@ -290,43 +257,37 @@ fn choice_operator_efficient_use() {
 fn choice_operator_inefficient_use() {
     #[derive(Default)]
     struct MyTest {
-        tuples: Arc<std::sync::Mutex<std::collections::BTreeSet<(u8, i8, usize)>>>,
+        tuples: Rc<std::sync::Mutex<std::collections::BTreeSet<(u8, i8, usize)>>>,
         num_trajectories: usize,
     };
 
     impl Controller for MyTest {
         #[inline]
-        fn on_restart(self, ex: &Executor) -> Self {
+        fn on_restart(&mut self, spawner: &Spawner) {
             let tuples = self.tuples.clone();
-            let ex_inner = ex.clone();
-            ex.spawn_detach(async move {
-                let a = hilberts_epsilon(ex_inner.clone(), 0u8..=0).await;
-                let b = hilberts_epsilon(ex_inner.clone(), 0i8..=1).await;
-                let c = hilberts_epsilon(ex_inner.clone(), 0usize..=2).await;
+            let spawner_inner = spawner.clone();
+            spawner.spawn_detach(async move {
+                let a = hilberts_epsilon(spawner_inner.clone(), 0u8..=0).await;
+                let b = hilberts_epsilon(spawner_inner.clone(), 0i8..=1).await;
+                let c = hilberts_epsilon(spawner_inner.clone(), 0usize..=2).await;
 
                 let val = (a, b, c);
 
                 tuples.lock().unwrap().insert(val);
             });
-
-            self
         }
         #[inline]
-        fn on_transition(self) -> Self {
-            self
-        }
+        fn on_transition(&mut self) {}
         #[inline]
-        fn on_end_of_trajectory(mut self, ex: &Executor) -> Self {
+        fn on_end_of_trajectory(&mut self, ex: &Executor) {
             assert_eq!(0, ex.unfinished_tasks());
 
             self.num_trajectories += 1;
-
-            self
         }
     }
-    let sim = <Simulator<MyTest>>::new(MyTest::default());
+    let mut sim = <Simulator<MyTest>>::new(MyTest::default());
 
-    dfs(&sim, None).unwrap();
+    dfs(&mut sim, None).unwrap();
 
     let ret = sim.take_controller();
     let tuples: Vec<(_, _, _)> = ret.tuples.lock().unwrap().iter().copied().collect();
@@ -353,44 +314,39 @@ fn choice_stream_validity() {
         num_trajectories: usize,
 
         /// The choice made by the current trajectory, collected at the end.
-        this_choice: Arc<AtomicUsize>,
+        this_choice: Rc<RefCell<usize>>,
     };
 
     impl Controller for TestState {
-        fn on_restart(self, ex: &Executor) -> Self {
-            let mut stream = ChoiceStream::new(ex, 0..5); // Choose 0 through 4.
+        fn on_restart(&mut self, spawner: &Spawner) {
+            let mut stream = ChoiceStream::new(spawner, 0..5); // Choose 0 through 4.
             let this_choice = self.this_choice.clone();
 
             // Enqueue a task that reads a single value from the ChoiceStream.
-            ex.spawn_detach(async move {
+            spawner.spawn_detach(async move {
                 let choice: usize = stream.next().await.unwrap();
-                this_choice.store(choice, Ordering::SeqCst);
+                *this_choice.borrow_mut() = choice;
 
                 // The stream should yield only a single choice.
                 assert_eq!(stream.next().await, None)
             });
-
-            self
         }
 
-        fn on_transition(self) -> Self {
-            self
-        }
+        fn on_transition(&mut self) {}
 
-        fn on_end_of_trajectory(mut self, ex: &Executor) -> Self {
+        fn on_end_of_trajectory(&mut self, ex: &Executor) {
             assert_eq!(0, ex.unfinished_tasks());
 
             // Count the choice at the trajectory's end.
-            let choice = self.this_choice.load(Ordering::SeqCst);
-            self.seen_choices.push(choice);
+            let this_choice = *self.this_choice.borrow();
+            self.seen_choices.push(this_choice);
 
             self.num_trajectories += 1;
-            self
         }
     }
 
-    let sim = Simulator::new(TestState::default());
-    dfs(&sim, None).unwrap();
+    let mut sim = Simulator::new(TestState::default());
+    dfs(&mut sim, None).unwrap();
 
     let state: TestState = sim.take_controller();
     let mut choices: Vec<usize> = state.seen_choices.iter().copied().collect();
@@ -456,36 +412,34 @@ fn exact_combinatorics_all_trajectories_equals_multinomial_coefficient() {
         }
         impl Controller for MyTest {
             #[inline]
-            fn on_restart(self, ex: &Executor) -> Self {
+            fn on_restart(&mut self, spawner: &Spawner) {
                 for _ in 0..self.n_processes {
-                    ex.spawn_detach(async move {
-                        for _ in 0..self.n_yields_explicit {
-                            yield_now().await;
+                    spawner.spawn_detach({
+                        let y = self.n_yields_explicit;
+                        async move {
+                            for _ in 0..y {
+                                yield_now().await;
+                            }
                         }
                     });
                 }
-
-                self
             }
             #[inline]
-            fn on_transition(self) -> Self {
-                self
-            }
+            fn on_transition(&mut self) {}
             #[inline]
-            fn on_end_of_trajectory(mut self, ex: &Executor) -> Self {
+            fn on_end_of_trajectory(&mut self, ex: &Executor) {
                 assert_eq!(0, ex.unfinished_tasks());
                 self.num_trajectories += 1;
-                self
             }
         }
 
-        let sim = <Simulator<MyTest>>::new(MyTest {
+        let mut sim = <Simulator<MyTest>>::new(MyTest {
             num_trajectories: 0,
             n_processes,
             n_yields_explicit,
         });
 
-        dfs(&sim, None).unwrap();
+        dfs(&mut sim, None).unwrap();
 
         let ret = sim.take_controller();
 

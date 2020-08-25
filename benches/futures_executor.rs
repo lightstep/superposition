@@ -9,18 +9,20 @@ use superposition::futures::{utils::yield_now, Executor};
 
 fn f(b: &mut criterion::Bencher, n_spawns: usize, n_yields_explicit: usize) {
     b.iter_custom(move |iters| {
-        let ex = Executor::default();
+        let mut ex = Executor::default();
+        let spawner = ex.spawner();
 
         let start = Instant::now();
 
         for _ in 0..iters {
             for _ in 0..n_spawns {
-                ex.spawn_detach(async move {
+                spawner.spawn_detach(async move {
                     for _ in 0..n_yields_explicit {
                         yield_now().await;
                     }
                 });
             }
+
             ex.reset();
         }
 
@@ -29,7 +31,7 @@ fn f(b: &mut criterion::Bencher, n_spawns: usize, n_yields_explicit: usize) {
 }
 
 fn bench(c: &mut Criterion) {
-    let mut group = c.benchmark_group("futures-executor-spawn-reset");
+    let mut group = c.benchmark_group("futures-executor-spawn-reset-heap-dyn");
     group.bench_function("1p1y", move |b| f(b, 1, 1));
     group.bench_function("2p1y", move |b| f(b, 2, 1));
     group.bench_function("2p2y", move |b| f(b, 2, 2));

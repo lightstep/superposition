@@ -1,14 +1,14 @@
 //! Implements an epsilon "choice" operator as a [futures_lite::Stream].
 
-use futures_lite::Stream;
-
+use std::cell::RefCell;
 use std::marker::Unpin;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::rc::Rc;
 use std::task::{Context, Poll};
 
-use crate::futures::Executor;
+use crate::futures::Spawner;
+
+use futures_lite::Stream;
 
 /// An Epsilon operator for async nondeterminism, for use as a [Stream].
 ///
@@ -31,11 +31,11 @@ use crate::futures::Executor;
 /// use futures_lite::StreamExt; // Provides .next().
 ///
 /// # let executor = superposition::futures::Executor::default();
-/// # let ex = &executor;
-/// let mut stream = ChoiceStream::new(ex, 0..5);
+/// # let spawner = executor.spawner();
+/// let mut stream = ChoiceStream::new(&spawner, 0..5);
 ///
 /// // Polling the stream yields the choice.
-/// ex.spawn_detach(async move {
+/// spawner.spawn_detach(async move {
 ///     let choice: usize = stream.next().await.unwrap();
 ///     assert!(choice < 5);
 /// });
@@ -50,7 +50,7 @@ where
     ///
     /// The flag is set by an async background process. When the stream is polled,
     /// if the flag is set or the maximum choice is encountered, the choice is yielded.
-    is_finalized: Arc<AtomicBool>,
+    is_finalized: Rc<RefCell<bool>>,
 
     /// An owned iterator over all possible choices.
     choices: I,
@@ -76,7 +76,7 @@ where
     X: Unpin + Send + Copy + 'static,
 {
     /// Creates a new [ChoiceStream].
-    pub fn new(ex: &Executor, mut choices: I) -> Self {
+    pub fn new(spawner: &Spawner, mut choices: I) -> Self {
         let cur_elem = choices.next();
         let next_elem = choices.next();
 
@@ -85,7 +85,7 @@ where
         assert!(next_elem.is_some());
 
         let stream = ChoiceStream {
-            is_finalized: Arc::default(),
+            is_finalized: Default::default(),
             choices,
             cur_elem,
             next_elem,
@@ -93,10 +93,10 @@ where
         };
 
         // Spawn a background task that locks in the current choice.
-        ex.spawn_detach({
+        spawner.spawn_detach({
             let is_finalized = stream.is_finalized.clone();
             async move {
-                is_finalized.store(true, Ordering::SeqCst);
+                *is_finalized.borrow_mut() = true;
             }
         });
 
@@ -122,7 +122,7 @@ where
         }
 
         // If the flag was set by the other task, return the current element.
-        if this.is_finalized.load(Ordering::SeqCst) {
+        if *this.is_finalized.borrow() {
             this.yielded_choice = true;
             return Poll::Ready(this.cur_elem);
         }

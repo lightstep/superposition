@@ -7,7 +7,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 
 use superposition::{
     dfs::Dfs,
-    futures::{utils::yield_now, Controller, Executor, Simulator},
+    futures::{utils::yield_now, Controller, Executor, Simulator, Spawner},
 };
 
 #[derive(Default, Copy, Clone)]
@@ -27,32 +27,30 @@ impl MyBench {
 
 impl Controller for MyBench {
     #[inline]
-    fn on_restart(self, ex: &Executor) -> Self {
+    fn on_restart(&mut self, spawner: &Spawner) {
         for _ in 0..self.n_processes {
-            ex.spawn_detach(async move {
-                for _ in 0..self.n_yields_explicit {
-                    yield_now().await;
+            spawner.spawn_detach({
+                let y = self.n_yields_explicit;
+                async move {
+                    for _ in 0..y {
+                        yield_now().await;
+                    }
                 }
             });
         }
-        self
     }
     #[inline]
-    fn on_transition(self) -> Self {
-        self
-    }
+    fn on_transition(&mut self) {}
     #[inline]
-    fn on_end_of_trajectory(self, _ex: &Executor) -> Self {
-        //assert_eq!(0, ex.unfinished_tasks());
-        self
-    }
+    fn on_end_of_trajectory(&mut self, _ex: &Executor) {}
 }
 
+// TODO(rw): Reuse DFS state to minimize spurious allocations.
 fn f(b: &mut criterion::Bencher, n_processes: usize, n_yields_explicit: usize) {
     b.iter_custom(move |iters| {
-        let sim = <Simulator<MyBench>>::new(MyBench::new(n_processes, n_yields_explicit));
+        let mut sim = Simulator::new(MyBench::new(n_processes, n_yields_explicit));
 
-        let mut it = Dfs::new(&sim, None);
+        let mut it = Dfs::new(&mut sim, None);
 
         let start = Instant::now();
         for _ in 0..iters {

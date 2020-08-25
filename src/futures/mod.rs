@@ -4,7 +4,7 @@ mod controller;
 pub use controller::Controller;
 
 mod executor;
-pub use executor::{Executor, Task};
+pub use executor::{Executor, Spawner, Task};
 
 mod choice_stream;
 pub use choice_stream::ChoiceStream;
@@ -17,3 +17,4 @@ pub use simulator::Simulator;
 
 pub mod sync;
 pub mod utils;
+pub mod waker;
