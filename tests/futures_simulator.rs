@@ -4,10 +4,8 @@ use std::{cell::RefCell, rc::Rc};
 use superposition::{
     dfs::{dfs, Dfs, DfsError},
     futures::{
-        hilberts_epsilon::{hilberts_epsilon, iproduct},
-        sync::IntrusiveAsyncMutex,
-        utils::yield_now,
-        ChoiceStream, Controller, Executor, Simulator, Spawner,
+        sync::IntrusiveAsyncMutex, utils::yield_now, ChoiceStream, Controller, Executor, Simulator,
+        Spawner,
     },
 };
 
@@ -199,10 +197,10 @@ fn detects_deadlock() {
 }
 
 #[test]
-fn choice_operator_efficient_use() {
+fn multiple_hilberts_epsilons_do_not_explode_state_space() {
     #[derive(Default)]
     struct MyTest {
-        tuples: Rc<std::sync::Mutex<std::collections::BTreeSet<(u8, i8, usize)>>>,
+        tuples: Rc<RefCell<std::collections::BTreeSet<(u8, i8, usize)>>>,
         num_trajectories: usize,
     };
 
@@ -212,13 +210,11 @@ fn choice_operator_efficient_use() {
             let tuples = self.tuples.clone();
             let spawner_inner = spawner.clone();
             spawner.spawn_detach(async move {
-                let val = hilberts_epsilon(
-                    spawner_inner.clone(),
-                    iproduct!(0u8..=0, 0i8..=1, 0usize..=2),
-                )
-                .await;
+                let a = spawner_inner.hilberts_epsilon(1).await as u8;
+                let b = spawner_inner.hilberts_epsilon(2).await as i8;
+                let c = spawner_inner.hilberts_epsilon(3).await as usize;
 
-                tuples.lock().unwrap().insert(val);
+                tuples.borrow_mut().insert((a, b, c));
             });
         }
 
@@ -237,7 +233,7 @@ fn choice_operator_efficient_use() {
     dfs(&mut sim, None).unwrap();
 
     let ret = sim.take_controller();
-    let tuples: Vec<(_, _, _)> = ret.tuples.lock().unwrap().iter().copied().collect();
+    let tuples: Vec<(_, _, _)> = ret.tuples.borrow().iter().copied().collect();
     assert_eq!(
         tuples,
         [
@@ -254,30 +250,44 @@ fn choice_operator_efficient_use() {
 }
 
 #[test]
-fn choice_operator_inefficient_use() {
+fn nested_hilberts_epsilons_increase_state_space_only_minimally() {
     #[derive(Default)]
     struct MyTest {
-        tuples: Rc<std::sync::Mutex<std::collections::BTreeSet<(u8, i8, usize)>>>,
         num_trajectories: usize,
     };
 
     impl Controller for MyTest {
         #[inline]
         fn on_restart(&mut self, spawner: &Spawner) {
-            let tuples = self.tuples.clone();
-            let spawner_inner = spawner.clone();
-            spawner.spawn_detach(async move {
-                let a = hilberts_epsilon(spawner_inner.clone(), 0u8..=0).await;
-                let b = hilberts_epsilon(spawner_inner.clone(), 0i8..=1).await;
-                let c = hilberts_epsilon(spawner_inner.clone(), 0usize..=2).await;
-
-                let val = (a, b, c);
-
-                tuples.lock().unwrap().insert(val);
+            spawner.spawn_detach({
+                let s = spawner.clone();
+                async move {
+                    if s.hilberts_epsilon(2).await == 0 {
+                        match s.hilberts_epsilon(3).await {
+                            // NOTE(rw): These calls all depend on one configuration of the parent
+                            // hilberts_epsilon calls, so they create only 5+7+11 universes.
+                            // This is analogous to an enum, or "sum" algebraic data types in
+                            // programming languages.
+                            0 => s.hilberts_epsilon(5).await,
+                            1 => s.hilberts_epsilon(7).await,
+                            2 => s.hilberts_epsilon(11).await,
+                            _ => unreachable!(),
+                        };
+                    } else {
+                        // NOTE(rw): These calls are independent of each other, and dependent on
+                        // their one parent universe, so this creates 13*17 universes.
+                        // This is analogous to a tuple, or "product" algebraic data types in
+                        // programming languages.
+                        s.hilberts_epsilon(13).await;
+                        s.hilberts_epsilon(17).await;
+                    }
+                }
             });
         }
+
         #[inline]
         fn on_transition(&mut self) {}
+
         #[inline]
         fn on_end_of_trajectory(&mut self, ex: &Executor) {
             assert_eq!(0, ex.unfinished_tasks());
@@ -290,20 +300,7 @@ fn choice_operator_inefficient_use() {
     dfs(&mut sim, None).unwrap();
 
     let ret = sim.take_controller();
-    let tuples: Vec<(_, _, _)> = ret.tuples.lock().unwrap().iter().copied().collect();
-    assert_eq!(
-        tuples,
-        [
-            (0, 0, 0),
-            (0, 0, 1),
-            (0, 0, 2),
-            (0, 1, 0),
-            (0, 1, 1),
-            (0, 1, 2),
-        ]
-    );
-    assert_eq!(6, tuples.len());
-    assert!(ret.num_trajectories >= 50);
+    assert_eq!(5 + 7 + 11 + 13 * 17, ret.num_trajectories);
 }
 
 #[test]
