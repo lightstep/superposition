@@ -9,6 +9,7 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
+use super::hilberts_epsilon::HilbertsEpsilon;
 use super::waker;
 use crate::KripkeStructure;
 
@@ -23,10 +24,13 @@ pub struct Task {
     fut: Pin<Box<dyn Future<Output = ()>>>,
 }
 
+/// Store the inner state shared by an Executor, Spawner, and potentially other types in the
+/// future.
 #[derive(Default)]
 struct Inner {
     task_id: TaskId,
     tasks: Vec<Task>,
+    hilberts_epsilons: Vec<HilbertsEpsilon>,
     choices: Vec<TaskId>,
     unfinished_tasks: isize,
     choices_dirty: bool,
@@ -68,6 +72,47 @@ impl Spawner {
 
         // Track this task as an unfinished task.
         inner.unfinished_tasks += 1;
+    }
+
+    /// Synchronously create a Hilbert's Epsilon operator, then return a future that fetches the
+    /// result. The result will have been populated by the simulation while the task that called
+    /// this function is awaited.
+    ///
+    /// Use this to create "parallel universes" in which the provided value is 0, 1, 2, .. up to
+    /// the number of universes provided.
+    ///
+    /// This function is carefully designed to not grow the state space more than the provided
+    /// number of universes.
+    ///
+    /// The return value is a plain struct, not an impl Future, so that users can easily store
+    /// the result future without boxing it.
+    #[inline]
+    pub fn hilberts_epsilon(&self, universes: usize) -> HilbertsEpsilonFuture {
+        // The number of universes cannot be zero (then no universes exist!).
+        assert!(universes >= 1, "HilbertEpsilon input must be nonzero");
+
+        // Obtain the vector index to use to retrieve the result of this HilbertsEpsilon object.
+        let idx = {
+            // Create a new HilbertsEpsilon.
+            let he = HilbertsEpsilon::new(universes);
+
+            // Mutably borrow the inner state, store the HilbertsEpsilon, and obtain the vector
+            // index at which the HilbertsEpsilon is stored. Because the vector is append-only, and
+            // the vector pushes are deterministic, that index is stable.
+            let mut inner = self.inner.borrow_mut();
+            let idx = inner.hilberts_epsilons.len();
+            inner.hilberts_epsilons.push(he);
+
+            debug_assert!(inner.hilberts_epsilons[idx].choices().is_some());
+
+            idx
+        };
+
+        // Return a future that yields to the scheduler, then fetches the universe chosen for this
+        // HilbertsEpsilon. The scheduler must have picked a choice for the HilbertsEpsilon during
+        // the time this function was yielded. The must_get call to the HilbertsEpsilon will panic
+        // if not.
+        HilbertsEpsilonFuture::new(self.inner.clone(), idx)
     }
 }
 
@@ -111,6 +156,20 @@ impl Executor {
     /// Valid inputs to this function are created by calling `choices`.
     #[inline]
     pub fn choose(&mut self, idx: usize) {
+        // If any HilbertsEpsilons need choosing, find the first one that does and act on it.
+        // (The ordering of the HilbertsEpsilons is deterministic, and this logic matches that in
+        // the [choices] function, so this is deterministic, too.)
+        {
+            let mut inner = self.inner.borrow_mut();
+            for he in inner.hilberts_epsilons.iter_mut() {
+                if he.choices().is_some() {
+                    he.choose(idx);
+                    return;
+                }
+            }
+        }
+
+        // No HilbertsEpsilons needed acting upon, so fetch the requested task and poll it.
         let mut task = {
             let mut inner = self.inner.borrow_mut();
 
@@ -192,10 +251,25 @@ impl Executor {
     /// If the result is zero, then the trajectory is finished.
     ///
     /// This function's result implies a range: 0..result. Any value in that range will be a valid
-    /// argument to `choose`.
+    /// argument to `choose`. (The range is left-inclusive and right-exclusive.)
     #[inline]
     pub fn choices(&mut self) -> usize {
-        self.collect_pending_choices()
+        self.collect_pending_choices();
+
+        let inner = self.inner.borrow();
+
+        // Find the first HilbertsEpsilon, if any, that needs to be acted upon.
+        // The returned value is the number of choices available in the found HilbertsEpsilon.
+        // (The ordering of this is deterministic, and matches what the [choose] function requires.)
+        for he in inner.hilberts_epsilons.iter() {
+            if let Some(n) = he.choices() {
+                return n;
+            }
+        }
+
+        // No HilbertsEpsilons needed acting upon, so return the number of async tasks available to
+        // poll.
+        inner.choices.len()
     }
 
     /// Reset the inner state.
@@ -213,6 +287,9 @@ impl Executor {
 
         // Clear the existing tasks.
         inner.tasks.clear();
+
+        // Clear the hilberts epsilons.
+        inner.hilberts_epsilons.clear();
 
         // Clear the existing choices.
         inner.choices.clear();
@@ -259,6 +336,59 @@ impl Executor {
             inner.choices_dirty = false;
         }
         inner.choices.len()
+    }
+}
+
+/// A future that fetches the value chosen in a "parallel universe" during simulation.
+///
+/// The Executor manages the actual choices made for each universe.
+///
+/// Created by calling [Executor::hilberts_epsilon].
+#[derive(Clone)]
+pub struct HilbertsEpsilonFuture {
+    inner: Rc<RefCell<Inner>>,
+    idx_of_underlying_hilberts_epsilon: usize,
+    yielded: bool,
+}
+
+impl HilbertsEpsilonFuture {
+    #[inline]
+    fn new(inner: Rc<RefCell<Inner>>, idx_of_underlying_hilberts_epsilon: usize) -> Self {
+        Self {
+            inner,
+            idx_of_underlying_hilberts_epsilon,
+            yielded: false,
+        }
+    }
+}
+
+impl std::fmt::Debug for HilbertsEpsilonFuture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HilbertsEpsilonFuture")
+            .field(
+                "idx_of_underlying_hilberts_epsilon",
+                &self.idx_of_underlying_hilberts_epsilon,
+            )
+            .finish()
+    }
+}
+
+impl Future for HilbertsEpsilonFuture {
+    type Output = usize;
+
+    #[inline]
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this: &mut Self = Pin::into_inner(self);
+        if !this.yielded {
+            this.yielded = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        } else {
+            let inner = this.inner.borrow();
+            let idx = this.idx_of_underlying_hilberts_epsilon;
+            let val = inner.hilberts_epsilons[idx].must_get();
+            Poll::Ready(val)
+        }
     }
 }
 

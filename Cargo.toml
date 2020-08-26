@@ -10,7 +10,6 @@ publish = false
 futures-intrusive = { version = "0.3", default-features = false, features = [ "alloc" ] }
 futures-lite = "0.1"
 futures-util = "0.3"
-itertools = "0.9"
 pin-project-lite = "0.1"
 thiserror = "1"
 
