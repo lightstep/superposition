@@ -224,16 +224,26 @@ impl Executor {
             // This action potentially leaves the tasks in an unordered state.
             //
             // TODO(rw): For large numbers of pending tasks, it may be faster to use a binary
-            // search to speed up the search.
+            // search to speed up the search. Or a very fast-to-insert hash table.
             let task_vec_id = {
-                inner
+                let maybe_task_vec_id: Option<usize> = inner
                     .tasks
                     .iter()
                     .enumerate()
                     .filter(|(_, t)| t.id == task_id)
                     .map(|(i, _)| i)
-                    .next()
-                    .expect("logic error")
+                    .next();
+
+                // If no task vec identifier was found, then the task that wanted to be woken up no
+                // longer exists. As a result, this returns immediately without polling any tasks.
+                //
+                // Since the task_id has already been removed, we know that the set of choices has
+                // changed. This prevents an infinite loop bug, whereby this same no-op choice
+                // would be chosen repeatedly, forever.
+                match maybe_task_vec_id {
+                    None => unreachable!(),
+                    Some(id) => id,
+                }
             };
 
             // Take the task itself.
