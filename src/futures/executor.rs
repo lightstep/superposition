@@ -241,7 +241,7 @@ impl Executor {
                 // changed. This prevents an infinite loop bug, whereby this same no-op choice
                 // would be chosen repeatedly, forever.
                 match maybe_task_vec_id {
-                    None => unreachable!(),
+                    None => return,
                     Some(id) => id,
                 }
             };
