@@ -138,8 +138,8 @@ impl Spawner {
         // Obtain the vector index to use to retrieve the result of this HilbertsEpsilon object.
         let idx = {
             // Mutably borrow the inner state, read the HilbertsEpsilon's id (as the length of the
-            // storage container), create the HilbertsEpsilon, store the HilbertsEpsilon. The id
-            // of the HilbertsEpsilon is the vector index at which the HilbertsEpsilon is stored.
+            // storage container), create the HilbertsEpsilon, then store it. The id of the
+            // HilbertsEpsilon is the vector index at which the HilbertsEpsilon is stored.
             // Because the vector is append-only, and the vector pushes are deterministic, that
             // index is stable (and thus the id is stable, too).
             let mut inner = self.inner.borrow_mut();

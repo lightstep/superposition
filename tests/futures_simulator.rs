@@ -407,12 +407,12 @@ fn task_id_tracking() {
         fn on_restart(&mut self, spawner: &Spawner) {
             {
                 let task_id = spawner.spawn_detach(async move {});
-                self.names.entry(task_id).or_insert("a");
+                self.names.insert(task_id, "a");
             }
 
             {
                 let task_id = spawner.spawn_detach(async move {});
-                self.names.entry(task_id).or_insert("b");
+                self.names.insert(task_id, "b");
             }
         }
         fn on_transition(&mut self, choice_taken: ChoiceTaken) {
@@ -439,7 +439,13 @@ fn task_id_tracking() {
 
     let mut logs = sim.take_controller().logs;
     logs.sort();
-    assert_eq!(vec![vec!["a", "a", "b"], vec!["b", "b", "a"],], logs);
+
+    // TODO(rw): prevent the extraneous first task choice that is happening here.
+    #[rustfmt::skip]
+    assert_eq!(vec![
+        vec!["a", "a", "b"],
+        vec!["b", "b", "a"],
+    ], logs);
 }
 
 #[test]
@@ -461,11 +467,7 @@ fn hilbert_epsilon_id_tracking() {
                     for name in &["a", "b"] {
                         let he_fut = spawner2.hilberts_epsilon(2);
 
-                        names
-                            .clone()
-                            .borrow_mut()
-                            .entry(he_fut.id())
-                            .or_insert(name);
+                        names.clone().borrow_mut().insert(he_fut.id(), name);
                     }
                 }
             });
@@ -496,6 +498,9 @@ fn hilbert_epsilon_id_tracking() {
 
     let mut logs = sim.take_controller().logs;
     logs.sort();
+
+    // TODO(rw): prevent the extraneous first hilberts epsilon choice that is happening here.
+    #[rustfmt::skip]
     assert_eq!(
         vec![
             vec![("a", 0), ("a", 0), ("b", 0)],
