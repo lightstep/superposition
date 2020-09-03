@@ -2,6 +2,13 @@
 
 Verify concurrent behavior of real code using finite-space model checking.
 
+## Usage
+
+```toml
+[dev-dependencies]
+superposition = { git = "ssh://git@github.com/eradb/superposition.git", branch = "main" }
+```
+
 ## Why finite-space model checking of real code?
 
 The current known state-of-the-art of distributed database correctness testing is to implement randomized fault injection. This typically takes the form of fuzz testing database operations, by randomly causing simulated network timeouts, hardware errors, logic errors, and so on. While that approach may catch some bugs, it does not provide anything close to a proof of correctness.

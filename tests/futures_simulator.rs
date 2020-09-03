@@ -1,4 +1,3 @@
-use futures_lite::StreamExt;
 use std::{cell::RefCell, rc::Rc};
 
 use superposition::{
@@ -44,6 +43,48 @@ fn simple_interleaving() {
     let mut sim = <Simulator<MyTest>>::new(MyTest);
 
     dfs(&mut sim, None).unwrap();
+}
+
+use futures_util::stream;
+use futures_util::stream::StreamExt;
+
+#[test]
+fn stream_iteration() {
+    #[derive(Default)]
+    struct MyTest {
+        num_trajectories: usize,
+        values: Rc<RefCell<Vec<u8>>>,
+    };
+    impl Controller for MyTest {
+        fn on_restart(&mut self, spawner: &Spawner) {
+            let mut s = stream::iter(vec![1, 2, 3]);
+            let values = self.values.clone();
+            spawner.spawn_detach(async move {
+                while let Some(v) = s.next().await {
+                    yield_now().await;
+                    values.borrow_mut().push(v);
+                }
+            });
+        }
+        fn on_transition(&mut self) {}
+        fn on_end_of_trajectory(&mut self, ex: &Executor) {
+            self.num_trajectories += 1;
+            assert_eq!(0, ex.unfinished_tasks());
+        }
+    }
+    let mut sim = <Simulator<MyTest>>::new(MyTest::default());
+    dfs(&mut sim, None).unwrap();
+    let ret = sim.take_controller();
+
+    let values: Vec<u8> = ret.values.borrow().iter().copied().collect();
+    #[rustfmt::skip]
+    assert_eq!(values, [
+        1,
+        1, 2,
+        1, 2, 3
+    ]);
+
+    assert!(ret.num_trajectories == 1);
 }
 
 #[test]
