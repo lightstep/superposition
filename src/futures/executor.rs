@@ -150,7 +150,7 @@ impl Spawner {
             inner.hilberts_epsilons.push(he);
 
             debug_assert!(inner.hilberts_epsilons[idx].choices().is_some());
-            debug_assert_eq!(inner.hilberts_epsilons[idx].id(), idx, "what");
+            debug_assert_eq!(inner.hilberts_epsilons[idx].id(), idx);
 
             idx
         };
