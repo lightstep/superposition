@@ -9,19 +9,39 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
-use super::hilberts_epsilon::HilbertsEpsilon;
+use super::hilberts_epsilon::{HilbertsEpsilon, HilbertsEpsilonId};
 use super::waker;
 use crate::KripkeStructure;
 
 /// A unique identifier assigned to each task upon its creation.
 ///
 /// Used for ordering tasks, so that execution is deterministic.
-type TaskId = usize;
+///
+/// TODO(rw): Convert this to a struct type.
+pub type TaskId = usize;
 
 /// A detached future that the executor will run.
 pub struct Task {
     id: TaskId,
     fut: Pin<Box<dyn Future<Output = ()>>>,
+}
+
+/// Indicate which choice was made by the executor as a result of a call to [choose].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ChoiceTaken {
+    HilbertsEpsilon {
+        id: HilbertsEpsilonId,
+        universe: usize,
+    },
+    TaskNoLongerExists {
+        id: TaskId,
+    },
+    TaskPollReady {
+        id: TaskId,
+    },
+    TaskPollPending {
+        id: TaskId,
+    },
 }
 
 /// Store the inner state shared by an Executor, Spawner, and potentially other types in the
@@ -70,7 +90,7 @@ pub struct Spawner {
 
 impl Spawner {
     #[inline]
-    pub fn spawn_detach(&self, fut: impl Future<Output = ()> + 'static) {
+    pub fn spawn_detach(&self, fut: impl Future<Output = ()> + 'static) -> TaskId {
         // Allocate the task on the heap and turn it into a trait object.
         let fut: Pin<Box<dyn Future<Output = ()>>> = Box::pin(fut);
 
@@ -92,6 +112,9 @@ impl Spawner {
 
         // Track this task as an unfinished task.
         inner.unfinished_tasks += 1;
+
+        // Return the task id to the user for their own use
+        id
     }
 
     /// Synchronously create a Hilbert's Epsilon operator, then return a future that fetches the
@@ -114,17 +137,20 @@ impl Spawner {
 
         // Obtain the vector index to use to retrieve the result of this HilbertsEpsilon object.
         let idx = {
-            // Create a new HilbertsEpsilon.
-            let he = HilbertsEpsilon::new(universes);
-
-            // Mutably borrow the inner state, store the HilbertsEpsilon, and obtain the vector
-            // index at which the HilbertsEpsilon is stored. Because the vector is append-only, and
-            // the vector pushes are deterministic, that index is stable.
+            // Mutably borrow the inner state, read the HilbertsEpsilon's id (as the length of the
+            // storage container), create the HilbertsEpsilon, then store it. The id of the
+            // HilbertsEpsilon is the vector index at which the HilbertsEpsilon is stored.
+            // Because the vector is append-only, and the vector pushes are deterministic, that
+            // index is stable (and thus the id is stable, too).
             let mut inner = self.inner.borrow_mut();
             let idx = inner.hilberts_epsilons.len();
+
+            // Create a new HilbertsEpsilon and push it to the set.
+            let he = HilbertsEpsilon::new(idx, universes);
             inner.hilberts_epsilons.push(he);
 
             debug_assert!(inner.hilberts_epsilons[idx].choices().is_some());
+            debug_assert_eq!(inner.hilberts_epsilons[idx].id(), idx);
 
             idx
         };
@@ -180,7 +206,7 @@ impl Executor {
     ///
     /// TODO(rw): Explore using an enum to represent the choice identifier.
     #[inline]
-    pub fn choose(&mut self, choice_identifier: usize) {
+    pub fn choose(&mut self, choice_identifier: usize) -> ChoiceTaken {
         // Get a mutable reference to the inner state that will be used to identify either the
         // HilbertsEpsilon to pick a value for, or to poll the indicated task.
         //
@@ -198,24 +224,37 @@ impl Executor {
         // the [choices] function, so this is deterministic, too.)
         {
             if inner.hilberts_epsilons_next < inner.hilberts_epsilons.len() {
-                let he = {
+                // Make the universe choice and extract out data for the ChoiceTaken.
+                //
+                // The HilbertsEpsilon's identifier and chosen universe are both Copy, so extract
+                // them here while the inner is borrowed.
+                let (he_id, universe) = {
                     let idx = inner.hilberts_epsilons_next;
-                    &mut inner.hilberts_epsilons[idx]
-                };
+                    let he = &mut inner.hilberts_epsilons[idx];
+                    debug_assert_eq!(he.id(), idx);
 
-                debug_assert!(he.choices().is_some());
-                he.choose(choice_identifier);
-                debug_assert!(he.choices().is_none());
+                    // Make the universe choice.
+                    debug_assert!(he.choices().is_some());
+                    he.choose(choice_identifier);
+                    debug_assert!(he.choices().is_none());
+
+                    (he.id(), he.must_get_chosen_universe())
+                };
 
                 // Increment the index of the next HilbertsEpsilon that may need choosing.
                 inner.hilberts_epsilons_next += 1;
-                return;
+
+                // Return a ChoiceTaken for this HilbertsEpsilon.
+                return ChoiceTaken::HilbertsEpsilon {
+                    id: he_id,
+                    universe,
+                };
             }
         }
 
         // No HilbertsEpsilons needed acting upon, so interpret the choice identifier as the index
         // of the TaskId to poll.
-        let mut task = {
+        let (mut task, task_id) = {
             // Fetch the requested task id, removing it from the set of choices.
             // This action potentially leaves the task ids in an unordered state.
             let task_id = inner.choices.swap_remove(choice_identifier);
@@ -241,7 +280,7 @@ impl Executor {
                 // changed. This prevents an infinite loop bug, whereby this same no-op choice
                 // would be chosen repeatedly, forever.
                 match maybe_task_vec_id {
-                    None => return,
+                    None => return ChoiceTaken::TaskNoLongerExists { id: task_id },
                     Some(id) => id,
                 }
             };
@@ -254,7 +293,7 @@ impl Executor {
             // Flag that an invariant may need to be re-established.
             inner.choices_dirty = true;
 
-            task
+            (task, task_id)
         };
 
         // Drop the mutable borrow to the inner state, because the waker needs uncontended mutable
@@ -280,7 +319,7 @@ impl Executor {
             }
         });
 
-        {
+        let task_poll_ready = {
             // Poll the task with the waker.
             let context = &mut Context::from_waker(&w);
             let poll_result = task.fut.as_mut().poll(context);
@@ -293,18 +332,27 @@ impl Executor {
                 Poll::Ready(()) => {
                     // Task finished, so decrement the count of unfinished tasks.
                     inner.unfinished_tasks -= 1;
+                    true
                 }
                 Poll::Pending => {
                     // Put the task back since there is more work to do.
                     inner.tasks.push(task);
                     inner.choices_dirty = true;
+                    false
                 }
             }
-        }
+        };
 
         // Collect the pending choices, which establishes the invariants needed when calling
         // `choices`.
         self.collect_pending_choices();
+
+        // Return a ChoiceTaken indicating that the task was polled, and if it was ready or pending.
+        if task_poll_ready {
+            ChoiceTaken::TaskPollReady { id: task_id }
+        } else {
+            ChoiceTaken::TaskPollPending { id: task_id }
+        }
     }
 
     /// Calculate the number of available choices.
@@ -414,18 +462,23 @@ impl Executor {
 #[derive(Clone)]
 pub struct HilbertsEpsilonFuture {
     inner: Rc<RefCell<Inner>>,
-    idx_of_underlying_hilberts_epsilon: usize,
+    id_of_underlying_hilberts_epsilon: usize,
     yielded: bool,
 }
 
 impl HilbertsEpsilonFuture {
     #[inline]
-    fn new(inner: Rc<RefCell<Inner>>, idx_of_underlying_hilberts_epsilon: usize) -> Self {
+    fn new(inner: Rc<RefCell<Inner>>, id_of_underlying_hilberts_epsilon: usize) -> Self {
         Self {
             inner,
-            idx_of_underlying_hilberts_epsilon,
+            id_of_underlying_hilberts_epsilon,
             yielded: false,
         }
+    }
+
+    #[inline]
+    pub fn id(&self) -> HilbertsEpsilonId {
+        self.id_of_underlying_hilberts_epsilon
     }
 }
 
@@ -433,8 +486,8 @@ impl std::fmt::Debug for HilbertsEpsilonFuture {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HilbertsEpsilonFuture")
             .field(
-                "idx_of_underlying_hilberts_epsilon",
-                &self.idx_of_underlying_hilberts_epsilon,
+                "id_of_underlying_hilberts_epsilon",
+                &self.id_of_underlying_hilberts_epsilon,
             )
             .finish()
     }
@@ -455,11 +508,11 @@ impl Future for HilbertsEpsilonFuture {
             Poll::Pending
         // If this future has already yielded, then the Executor must have chosen a value for it.
         // Therefore, it is always true that there is a value to return.
-        // (If this invariant is not satisfied, must_get will panic.)
+        // (If this invariant is not satisfied, must_get_chosen_universe will panic.)
         } else {
             let inner = this.inner.borrow();
-            let idx = this.idx_of_underlying_hilberts_epsilon;
-            let val = inner.hilberts_epsilons[idx].must_get();
+            let idx = this.id_of_underlying_hilberts_epsilon;
+            let val = inner.hilberts_epsilons[idx].must_get_chosen_universe();
             Poll::Ready(val)
         }
     }

@@ -3,8 +3,8 @@ use std::{cell::RefCell, rc::Rc};
 use superposition::{
     dfs::{dfs, Dfs, DfsError},
     futures::{
-        sync::IntrusiveAsyncMutex, utils::yield_now, ChoiceStream, Controller, Executor, Simulator,
-        Spawner,
+        sync::IntrusiveAsyncMutex, utils::yield_now, ChoiceStream, ChoiceTaken, Controller,
+        Executor, HilbertsEpsilonId, Simulator, Spawner, TaskId,
     },
 };
 
@@ -13,7 +13,7 @@ fn minimal_simulation() {
     struct MyTest;
     impl Controller for MyTest {
         fn on_restart(&mut self, _: &Spawner) {}
-        fn on_transition(&mut self) {}
+        fn on_transition(&mut self, _: ChoiceTaken) {}
         fn on_end_of_trajectory(&mut self, _: &Executor) {}
     }
 
@@ -35,7 +35,7 @@ fn simple_interleaving() {
                 });
             }
         }
-        fn on_transition(&mut self) {}
+        fn on_transition(&mut self, _: ChoiceTaken) {}
         fn on_end_of_trajectory(&mut self, ex: &Executor) {
             assert_eq!(0, ex.unfinished_tasks());
         }
@@ -66,7 +66,7 @@ fn stream_iteration() {
                 }
             });
         }
-        fn on_transition(&mut self) {}
+        fn on_transition(&mut self, _: ChoiceTaken) {}
         fn on_end_of_trajectory(&mut self, ex: &Executor) {
             self.num_trajectories += 1;
             assert_eq!(0, ex.unfinished_tasks());
@@ -133,7 +133,7 @@ fn detects_race_condition() {
             }
         }
         #[inline]
-        fn on_transition(&mut self) {}
+        fn on_transition(&mut self, _: ChoiceTaken) {}
         #[inline]
         fn on_end_of_trajectory(&mut self, ex: &Executor) {
             assert_eq!(0, ex.unfinished_tasks());
@@ -175,7 +175,7 @@ fn detects_livelock() {
             });
         }
         #[inline]
-        fn on_transition(&mut self) {}
+        fn on_transition(&mut self, _: ChoiceTaken) {}
         #[inline]
         fn on_end_of_trajectory(&mut self, _: &Executor) {}
     }
@@ -220,7 +220,7 @@ fn detects_deadlock() {
             });
         }
         #[inline]
-        fn on_transition(&mut self) {}
+        fn on_transition(&mut self, _: ChoiceTaken) {}
         #[inline]
         fn on_end_of_trajectory(&mut self, ex: &Executor) {
             if ex.unfinished_tasks() >= 1 {
@@ -260,7 +260,7 @@ fn multiple_hilberts_epsilons_do_not_explode_state_space() {
         }
 
         #[inline]
-        fn on_transition(&mut self) {}
+        fn on_transition(&mut self, _: ChoiceTaken) {}
 
         #[inline]
         fn on_end_of_trajectory(&mut self, ex: &Executor) {
@@ -327,7 +327,7 @@ fn nested_hilberts_epsilons_increase_state_space_only_minimally() {
         }
 
         #[inline]
-        fn on_transition(&mut self) {}
+        fn on_transition(&mut self, _: ChoiceTaken) {}
 
         #[inline]
         fn on_end_of_trajectory(&mut self, ex: &Executor) {
@@ -370,7 +370,7 @@ fn choice_stream_validity() {
             });
         }
 
-        fn on_transition(&mut self) {}
+        fn on_transition(&mut self, _: ChoiceTaken) {}
 
         fn on_end_of_trajectory(&mut self, ex: &Executor) {
             assert_eq!(0, ex.unfinished_tasks());
@@ -391,6 +391,125 @@ fn choice_stream_validity() {
     choices.sort_unstable();
     assert_eq!(choices, vec![0, 1, 2, 3, 4]);
     assert_eq!(state.num_trajectories, 5);
+}
+
+#[test]
+fn task_id_tracking() {
+    use std::collections::HashMap;
+
+    #[derive(Default)]
+    struct MyTest {
+        log: Vec<&'static str>,
+        logs: Vec<Vec<&'static str>>,
+        names: HashMap<TaskId, &'static str>,
+    }
+    impl Controller for MyTest {
+        fn on_restart(&mut self, spawner: &Spawner) {
+            {
+                let task_id = spawner.spawn_detach(async move {});
+                self.names.insert(task_id, "a");
+            }
+
+            {
+                let task_id = spawner.spawn_detach(async move {});
+                self.names.insert(task_id, "b");
+            }
+        }
+        fn on_transition(&mut self, choice_taken: ChoiceTaken) {
+            match choice_taken {
+                ChoiceTaken::TaskPollPending { id } | ChoiceTaken::TaskPollReady { id } => {
+                    let name = self.names.get(&id).expect("unknown task id, logic error");
+                    self.log.push(name);
+                }
+                ChoiceTaken::HilbertsEpsilon { .. } | ChoiceTaken::TaskNoLongerExists { .. } => {
+                    panic!("should not happen")
+                }
+            }
+        }
+        fn on_end_of_trajectory(&mut self, ex: &Executor) {
+            assert_eq!(0, ex.unfinished_tasks());
+
+            let log = std::mem::replace(&mut self.log, Vec::new());
+            self.logs.push(log);
+        }
+    }
+    let mut sim: Simulator<MyTest> = Default::default();
+
+    dfs(&mut sim, None).unwrap();
+
+    let mut logs = sim.take_controller().logs;
+    logs.sort();
+
+    // TODO(rw): prevent the extraneous first task choice that is happening here.
+    #[rustfmt::skip]
+    assert_eq!(vec![
+        vec!["a", "a", "b"],
+        vec!["b", "b", "a"],
+    ], logs);
+}
+
+#[test]
+fn hilbert_epsilon_id_tracking() {
+    use std::collections::HashMap;
+
+    #[derive(Default)]
+    struct MyTest {
+        log: Vec<(&'static str, usize)>,
+        logs: Vec<Vec<(&'static str, usize)>>,
+        names: Rc<RefCell<HashMap<HilbertsEpsilonId, &'static str>>>,
+    }
+    impl Controller for MyTest {
+        fn on_restart(&mut self, spawner: &Spawner) {
+            spawner.spawn_detach({
+                let spawner2 = spawner.clone();
+                let names = self.names.clone();
+                async move {
+                    for name in &["a", "b"] {
+                        let he_fut = spawner2.hilberts_epsilon(2);
+
+                        names.clone().borrow_mut().insert(he_fut.id(), name);
+                    }
+                }
+            });
+        }
+        fn on_transition(&mut self, choice_taken: ChoiceTaken) {
+            match choice_taken {
+                ChoiceTaken::TaskPollPending { .. } | ChoiceTaken::TaskPollReady { .. } => (),
+                ChoiceTaken::HilbertsEpsilon { id, universe } => {
+                    let name: &'static str = {
+                        let names = self.names.borrow();
+                        names.get(&id).expect("unknown task id, logic error")
+                    };
+                    self.log.push((name, universe));
+                }
+                ChoiceTaken::TaskNoLongerExists { .. } => panic!("should not happen"),
+            }
+        }
+        fn on_end_of_trajectory(&mut self, ex: &Executor) {
+            assert_eq!(0, ex.unfinished_tasks());
+
+            let log = std::mem::replace(&mut self.log, Vec::new());
+            self.logs.push(log);
+        }
+    }
+    let mut sim: Simulator<MyTest> = Default::default();
+
+    dfs(&mut sim, None).unwrap();
+
+    let mut logs = sim.take_controller().logs;
+    logs.sort();
+
+    // TODO(rw): prevent the extraneous first hilberts epsilon choice that is happening here.
+    #[rustfmt::skip]
+    assert_eq!(
+        vec![
+            vec![("a", 0), ("a", 0), ("b", 0)],
+            vec![("a", 0), ("b", 1)],
+            vec![("a", 1), ("a", 1), ("b", 0)],
+            vec![("a", 1), ("b", 1)],
+        ],
+        logs
+    );
 }
 
 /// Tests that the trajectories in the system exactly match the expected counts.
@@ -463,7 +582,7 @@ fn exact_combinatorics_all_trajectories_equals_multinomial_coefficient() {
                 }
             }
             #[inline]
-            fn on_transition(&mut self) {}
+            fn on_transition(&mut self, _: ChoiceTaken) {}
             #[inline]
             fn on_end_of_trajectory(&mut self, ex: &Executor) {
                 assert_eq!(0, ex.unfinished_tasks());

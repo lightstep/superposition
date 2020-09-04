@@ -1,6 +1,6 @@
 //! Defines the Controller trait that provides user hooks.
 
-use super::executor::{Executor, Spawner};
+use super::executor::{ChoiceTaken, Executor, Spawner};
 
 /// Events used to track behavior and manage state during a simulation.
 ///
@@ -8,13 +8,14 @@ use super::executor::{Executor, Spawner};
 /// so that the code can be simulated repeatedly. This is also where allocations in a simulation
 /// can be reused.
 pub trait Controller {
-    /// Triggers on every state transition.
+    /// Triggers on every state transition. The provided ChoiceTaken can be destructured to track
+    /// which state transitions occurred and why.
     ///
     /// # Example uses:
     ///
     /// - Storing state-specific metadata in a Vec, to be analyzed at the end of a trajectory.
     /// - Checking state-specific invariants.
-    fn on_transition(&mut self);
+    fn on_transition(&mut self, choice_taken: ChoiceTaken);
 
     /// Triggers when the successor set is empty.
     ///

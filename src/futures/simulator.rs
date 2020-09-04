@@ -60,10 +60,10 @@ where
 
     #[inline]
     fn transition(&mut self, label: Self::Label) {
-        self.executor.choose(label);
+        let choice_taken = self.executor.choose(label);
 
         if let Some(c) = self.controller.as_mut() {
-            c.on_transition();
+            c.on_transition(choice_taken);
         }
     }
 
