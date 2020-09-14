@@ -89,7 +89,7 @@ fn user_can_track_state() {
 
     let want: Vec<usize> = (0..10).collect();
     let got = {
-        tracker.borrow_mut().sort();
+        tracker.borrow_mut().sort_unstable();
         tracker.borrow_mut().clone()
     };
     assert_eq!(want, got);
