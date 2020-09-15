@@ -3,7 +3,7 @@ use std::{cell::RefCell, rc::Rc};
 use superposition::{
     dfs::{dfs, Dfs, DfsError},
     futures::{
-        sync::IntrusiveAsyncMutex, utils::yield_now, ChoiceSet, ChoiceSetTakeResult, ChoiceStream,
+        sync::IntrusiveAsyncMutex, utils::yield_now, ChoiceSet, ChoiceSetRecvResult, ChoiceStream,
         ChoiceTaken, Controller, Executor, HilbertsEpsilonId, Simulator, Spawner, TaskId,
     },
 };
@@ -517,7 +517,7 @@ fn choice_set_validity() {
     #[derive(PartialOrd, PartialEq, Eq, Ord, Debug)]
     enum E {
         Out(u8),
-        In(ChoiceSetTakeResult<u8>),
+        In(ChoiceSetRecvResult<u8>),
     }
     #[derive(Default)]
     struct MyTest {
@@ -568,14 +568,14 @@ fn choice_set_validity() {
         // Value sent then lost (e.g. lost in transit).
         vec![
             E::Out(0),
-            E::In(ChoiceSetTakeResult::Lost(0)),
-            E::In(ChoiceSetTakeResult::Empty),
+            E::In(ChoiceSetRecvResult::Lost(0)),
+            E::In(ChoiceSetRecvResult::Empty),
         ],
         // Value sent then received.
         vec![
             E::Out(0),
-            E::In(ChoiceSetTakeResult::Received(0)),
-            E::In(ChoiceSetTakeResult::Empty),
+            E::In(ChoiceSetRecvResult::Received(0)),
+            E::In(ChoiceSetRecvResult::Empty),
         ],
     ];
 
@@ -590,7 +590,7 @@ fn choice_set_client_server() {
     #[derive(PartialOrd, PartialEq, Eq, Ord, Debug)]
     enum E {
         Out(u8),
-        In(ChoiceSetTakeResult<u8>),
+        In(ChoiceSetRecvResult<u8>),
     }
     #[derive(Default)]
     struct MyTest {
@@ -626,7 +626,7 @@ fn choice_set_client_server() {
                     loop {
                         let got = set.recv(&spawner2).await;
                         log.borrow_mut().push(E::In(got));
-                        if let ChoiceSetTakeResult::Empty = got {
+                        if let ChoiceSetRecvResult::Empty = got {
                             break;
                         }
                     }
@@ -656,9 +656,9 @@ fn choice_set_client_server() {
             vec![
                 E::Out(0),
                 E::Out(1),
-                E::In(ChoiceSetTakeResult::Lost(0)),
-                E::In(ChoiceSetTakeResult::Lost(1)),
-                E::In(ChoiceSetTakeResult::Empty),
+                E::In(ChoiceSetRecvResult::Lost(0)),
+                E::In(ChoiceSetRecvResult::Lost(1)),
+                E::In(ChoiceSetRecvResult::Empty),
             ],
             // First value: sent then lost (e.g. lost in transit).
             // Second value: ditto.
@@ -666,19 +666,19 @@ fn choice_set_client_server() {
             vec![
                 E::Out(0),
                 E::Out(1),
-                E::In(ChoiceSetTakeResult::Lost(1)),
-                E::In(ChoiceSetTakeResult::Lost(0)),
-                E::In(ChoiceSetTakeResult::Empty),
+                E::In(ChoiceSetRecvResult::Lost(1)),
+                E::In(ChoiceSetRecvResult::Lost(0)),
+                E::In(ChoiceSetRecvResult::Empty),
             ],
             // First value: sent then lost (e.g. lost in transit).
             // Second value: ditto.
             // Ordering 3 of 3.
             vec![
                 E::Out(0),
-                E::In(ChoiceSetTakeResult::Lost(0)),
+                E::In(ChoiceSetRecvResult::Lost(0)),
                 E::Out(1),
-                E::In(ChoiceSetTakeResult::Lost(1)),
-                E::In(ChoiceSetTakeResult::Empty),
+                E::In(ChoiceSetRecvResult::Lost(1)),
+                E::In(ChoiceSetRecvResult::Empty),
             ],
         ]);
         want.extend(vec![
@@ -688,9 +688,9 @@ fn choice_set_client_server() {
             vec![
                 E::Out(0),
                 E::Out(1),
-                E::In(ChoiceSetTakeResult::Received(0)),
-                E::In(ChoiceSetTakeResult::Received(1)),
-                E::In(ChoiceSetTakeResult::Empty),
+                E::In(ChoiceSetRecvResult::Received(0)),
+                E::In(ChoiceSetRecvResult::Received(1)),
+                E::In(ChoiceSetRecvResult::Empty),
             ],
             // First value: sent then received.
             // Second value: ditto.
@@ -698,19 +698,19 @@ fn choice_set_client_server() {
             vec![
                 E::Out(0),
                 E::Out(1),
-                E::In(ChoiceSetTakeResult::Received(1)),
-                E::In(ChoiceSetTakeResult::Received(0)),
-                E::In(ChoiceSetTakeResult::Empty),
+                E::In(ChoiceSetRecvResult::Received(1)),
+                E::In(ChoiceSetRecvResult::Received(0)),
+                E::In(ChoiceSetRecvResult::Empty),
             ],
             // First value: sent then received.
             // Second value: ditto.
             // Ordering 3 of 3.
             vec![
                 E::Out(0),
-                E::In(ChoiceSetTakeResult::Received(0)),
+                E::In(ChoiceSetRecvResult::Received(0)),
                 E::Out(1),
-                E::In(ChoiceSetTakeResult::Received(1)),
-                E::In(ChoiceSetTakeResult::Empty),
+                E::In(ChoiceSetRecvResult::Received(1)),
+                E::In(ChoiceSetRecvResult::Empty),
             ],
         ]);
         want.extend(vec![
@@ -720,9 +720,9 @@ fn choice_set_client_server() {
             vec![
                 E::Out(0),
                 E::Out(1),
-                E::In(ChoiceSetTakeResult::Received(0)),
-                E::In(ChoiceSetTakeResult::Lost(1)),
-                E::In(ChoiceSetTakeResult::Empty),
+                E::In(ChoiceSetRecvResult::Received(0)),
+                E::In(ChoiceSetRecvResult::Lost(1)),
+                E::In(ChoiceSetRecvResult::Empty),
             ],
             // First value: sent then received.
             // Second value: sent then lost.
@@ -730,19 +730,19 @@ fn choice_set_client_server() {
             vec![
                 E::Out(0),
                 E::Out(1),
-                E::In(ChoiceSetTakeResult::Lost(1)),
-                E::In(ChoiceSetTakeResult::Received(0)),
-                E::In(ChoiceSetTakeResult::Empty),
+                E::In(ChoiceSetRecvResult::Lost(1)),
+                E::In(ChoiceSetRecvResult::Received(0)),
+                E::In(ChoiceSetRecvResult::Empty),
             ],
             // First value: sent then received.
             // Second value: sent then lost.
             // Ordering 3 of 3.
             vec![
                 E::Out(0),
-                E::In(ChoiceSetTakeResult::Received(0)),
+                E::In(ChoiceSetRecvResult::Received(0)),
                 E::Out(1),
-                E::In(ChoiceSetTakeResult::Lost(1)),
-                E::In(ChoiceSetTakeResult::Empty),
+                E::In(ChoiceSetRecvResult::Lost(1)),
+                E::In(ChoiceSetRecvResult::Empty),
             ],
         ]);
         want.extend(vec![
@@ -752,9 +752,9 @@ fn choice_set_client_server() {
             vec![
                 E::Out(0),
                 E::Out(1),
-                E::In(ChoiceSetTakeResult::Lost(0)),
-                E::In(ChoiceSetTakeResult::Received(1)),
-                E::In(ChoiceSetTakeResult::Empty),
+                E::In(ChoiceSetRecvResult::Lost(0)),
+                E::In(ChoiceSetRecvResult::Received(1)),
+                E::In(ChoiceSetRecvResult::Empty),
             ],
             // First value: sent then lost.
             // Second value: sent then received.
@@ -762,19 +762,19 @@ fn choice_set_client_server() {
             vec![
                 E::Out(0),
                 E::Out(1),
-                E::In(ChoiceSetTakeResult::Received(1)),
-                E::In(ChoiceSetTakeResult::Lost(0)),
-                E::In(ChoiceSetTakeResult::Empty),
+                E::In(ChoiceSetRecvResult::Received(1)),
+                E::In(ChoiceSetRecvResult::Lost(0)),
+                E::In(ChoiceSetRecvResult::Empty),
             ],
             // First value: sent then lost.
             // Second value: sent then received.
             // Ordering 3 of 3.
             vec![
                 E::Out(0),
-                E::In(ChoiceSetTakeResult::Lost(0)),
+                E::In(ChoiceSetRecvResult::Lost(0)),
                 E::Out(1),
-                E::In(ChoiceSetTakeResult::Received(1)),
-                E::In(ChoiceSetTakeResult::Empty),
+                E::In(ChoiceSetRecvResult::Received(1)),
+                E::In(ChoiceSetRecvResult::Empty),
             ],
         ]);
         want.extend(vec![
@@ -783,21 +783,21 @@ fn choice_set_client_server() {
             // Ordering 1 of 1.
             vec![
                 E::Out(0),
-                E::In(ChoiceSetTakeResult::Lost(0)),
-                E::In(ChoiceSetTakeResult::Empty),
+                E::In(ChoiceSetRecvResult::Lost(0)),
+                E::In(ChoiceSetRecvResult::Empty),
                 E::Out(1),
             ],
             // First value: sent after receiver terminates.
             // Second value: sent after receiver terminates.
             // Ordering 1 of 1.
-            vec![E::In(ChoiceSetTakeResult::Empty), E::Out(0), E::Out(1)],
+            vec![E::In(ChoiceSetRecvResult::Empty), E::Out(0), E::Out(1)],
             // First value: sent then received.
             // Second value: sent after receiver terminates.
             // Ordering 1 of 1.
             vec![
                 E::Out(0),
-                E::In(ChoiceSetTakeResult::Received(0)),
-                E::In(ChoiceSetTakeResult::Empty),
+                E::In(ChoiceSetRecvResult::Received(0)),
+                E::In(ChoiceSetRecvResult::Empty),
                 E::Out(1),
             ],
         ]);

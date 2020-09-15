@@ -7,7 +7,7 @@ mod executor;
 pub use executor::{ChoiceTaken, Executor, Spawner, Task, TaskId};
 
 mod choice_set;
-pub use choice_set::{ChoiceSet, ChoiceSetTakeResult};
+pub use choice_set::{ChoiceSet, ChoiceSetRecvResult};
 
 mod choice_stream;
 pub use choice_stream::ChoiceStream;
