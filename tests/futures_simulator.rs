@@ -3,8 +3,8 @@ use std::{cell::RefCell, rc::Rc};
 use superposition::{
     dfs::{dfs, Dfs, DfsError},
     futures::{
-        sync::IntrusiveAsyncMutex, utils::yield_now, ChoiceStream, ChoiceTaken, Controller,
-        Executor, HilbertsEpsilonId, Simulator, Spawner, TaskId,
+        sync::IntrusiveAsyncMutex, utils::yield_now, ChoiceSet, ChoiceSetRecvResult, ChoiceStream,
+        ChoiceTaken, Controller, Executor, HilbertsEpsilonId, Simulator, Spawner, TaskId,
     },
 };
 
@@ -510,6 +510,312 @@ fn hilbert_epsilon_id_tracking() {
         ],
         logs
     );
+}
+
+#[test]
+fn choice_set_validity() {
+    #[derive(PartialOrd, PartialEq, Eq, Ord, Debug)]
+    enum E {
+        Out(u8),
+        In(ChoiceSetRecvResult<u8>),
+    }
+    #[derive(Default)]
+    struct MyTest {
+        set: ChoiceSet<u8>,
+        log: Rc<RefCell<Vec<E>>>,
+        logs: Rc<RefCell<Vec<Vec<E>>>>,
+    }
+    impl Controller for MyTest {
+        fn on_restart(&mut self, spawner: &Spawner) {
+            self.set.reset();
+            self.log.borrow_mut().clear();
+
+            spawner.spawn_detach({
+                let set = self.set.clone();
+                let log = self.log.clone();
+                let spawner2 = spawner.clone();
+
+                async move {
+                    // Send a value.
+                    set.send(0).await;
+                    log.borrow_mut().push(E::Out(0));
+
+                    // Try to receive a value once.
+                    let got = set.recv(&spawner2).await;
+                    log.borrow_mut().push(E::In(got));
+
+                    // Try to receive a value again.
+                    let got = set.recv(&spawner2).await;
+                    log.borrow_mut().push(E::In(got));
+                }
+            });
+        }
+        fn on_transition(&mut self, _: ChoiceTaken) {}
+        fn on_end_of_trajectory(&mut self, ex: &Executor) {
+            assert_eq!(0, ex.unfinished_tasks());
+
+            let log = self.log.replace(Vec::new());
+            self.logs.borrow_mut().push(log);
+        }
+    }
+    let mut sim: Simulator<MyTest> = Default::default();
+
+    dfs(&mut sim, None).unwrap();
+
+    let mut got = sim.take_controller().logs.replace(Vec::new());
+
+    let want = vec![
+        // Value sent then lost (e.g. lost in transit).
+        vec![
+            E::Out(0),
+            E::In(ChoiceSetRecvResult::Lost(0)),
+            E::In(ChoiceSetRecvResult::Empty),
+        ],
+        // Value sent then received.
+        vec![
+            E::Out(0),
+            E::In(ChoiceSetRecvResult::Received(0)),
+            E::In(ChoiceSetRecvResult::Empty),
+        ],
+    ];
+
+    got.sort();
+
+    assert_eq!(want, got);
+}
+
+#[test]
+fn choice_set_client_server() {
+    /// An event to log for testing.
+    #[derive(PartialOrd, PartialEq, Eq, Ord, Debug)]
+    enum E {
+        Out(u8),
+        In(ChoiceSetRecvResult<u8>),
+    }
+    #[derive(Default)]
+    struct MyTest {
+        set: ChoiceSet<u8>,
+        log: Rc<RefCell<Vec<E>>>,
+        logs: Rc<RefCell<Vec<Vec<E>>>>,
+    }
+    impl Controller for MyTest {
+        fn on_restart(&mut self, spawner: &Spawner) {
+            self.set.reset();
+            self.log.borrow_mut().clear();
+
+            // Spawn a sender, and send values unconditionally.
+            spawner.spawn_detach({
+                let set = self.set.clone();
+                let log = self.log.clone();
+
+                async move {
+                    for i in 0u8..2 {
+                        set.send(i).await;
+                        log.borrow_mut().push(E::Out(i));
+                    }
+                }
+            });
+
+            // Spawn a receiver, and recieve messages until the buffer indicates it is empty.
+            spawner.spawn_detach({
+                let spawner2 = spawner.clone();
+                let set = self.set.clone();
+                let log = self.log.clone();
+
+                async move {
+                    loop {
+                        let got = set.recv(&spawner2).await;
+                        log.borrow_mut().push(E::In(got));
+                        if let ChoiceSetRecvResult::Empty = got {
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+        fn on_transition(&mut self, _: ChoiceTaken) {}
+        fn on_end_of_trajectory(&mut self, ex: &Executor) {
+            assert_eq!(0, ex.unfinished_tasks());
+
+            let log = self.log.replace(Vec::new());
+            self.logs.borrow_mut().push(log);
+        }
+    }
+
+    // Run the sim and extract the observed logs.
+    let mut sim: Simulator<MyTest> = Default::default();
+    dfs(&mut sim, None).unwrap();
+    let mut got = sim.take_controller().logs.replace(Vec::new());
+
+    let want = {
+        let mut want = vec![];
+        want.extend(vec![
+            // First value: sent then lost (e.g. lost in transit).
+            // Second value: ditto.
+            // Ordering 1 of 3.
+            vec![
+                E::Out(0),
+                E::Out(1),
+                E::In(ChoiceSetRecvResult::Lost(0)),
+                E::In(ChoiceSetRecvResult::Lost(1)),
+                E::In(ChoiceSetRecvResult::Empty),
+            ],
+            // First value: sent then lost (e.g. lost in transit).
+            // Second value: ditto.
+            // Ordering 2 of 3.
+            vec![
+                E::Out(0),
+                E::Out(1),
+                E::In(ChoiceSetRecvResult::Lost(1)),
+                E::In(ChoiceSetRecvResult::Lost(0)),
+                E::In(ChoiceSetRecvResult::Empty),
+            ],
+            // First value: sent then lost (e.g. lost in transit).
+            // Second value: ditto.
+            // Ordering 3 of 3.
+            vec![
+                E::Out(0),
+                E::In(ChoiceSetRecvResult::Lost(0)),
+                E::Out(1),
+                E::In(ChoiceSetRecvResult::Lost(1)),
+                E::In(ChoiceSetRecvResult::Empty),
+            ],
+        ]);
+        want.extend(vec![
+            // First value: sent then received.
+            // Second value: ditto.
+            // Ordered 1 of 3.
+            vec![
+                E::Out(0),
+                E::Out(1),
+                E::In(ChoiceSetRecvResult::Received(0)),
+                E::In(ChoiceSetRecvResult::Received(1)),
+                E::In(ChoiceSetRecvResult::Empty),
+            ],
+            // First value: sent then received.
+            // Second value: ditto.
+            // Ordered 2 of 3.
+            vec![
+                E::Out(0),
+                E::Out(1),
+                E::In(ChoiceSetRecvResult::Received(1)),
+                E::In(ChoiceSetRecvResult::Received(0)),
+                E::In(ChoiceSetRecvResult::Empty),
+            ],
+            // First value: sent then received.
+            // Second value: ditto.
+            // Ordering 3 of 3.
+            vec![
+                E::Out(0),
+                E::In(ChoiceSetRecvResult::Received(0)),
+                E::Out(1),
+                E::In(ChoiceSetRecvResult::Received(1)),
+                E::In(ChoiceSetRecvResult::Empty),
+            ],
+        ]);
+        want.extend(vec![
+            // First value: sent then received.
+            // Second value: sent then lost.
+            // Ordering 1 of 3.
+            vec![
+                E::Out(0),
+                E::Out(1),
+                E::In(ChoiceSetRecvResult::Received(0)),
+                E::In(ChoiceSetRecvResult::Lost(1)),
+                E::In(ChoiceSetRecvResult::Empty),
+            ],
+            // First value: sent then received.
+            // Second value: sent then lost.
+            // Ordering 2 of 3.
+            vec![
+                E::Out(0),
+                E::Out(1),
+                E::In(ChoiceSetRecvResult::Lost(1)),
+                E::In(ChoiceSetRecvResult::Received(0)),
+                E::In(ChoiceSetRecvResult::Empty),
+            ],
+            // First value: sent then received.
+            // Second value: sent then lost.
+            // Ordering 3 of 3.
+            vec![
+                E::Out(0),
+                E::In(ChoiceSetRecvResult::Received(0)),
+                E::Out(1),
+                E::In(ChoiceSetRecvResult::Lost(1)),
+                E::In(ChoiceSetRecvResult::Empty),
+            ],
+        ]);
+        want.extend(vec![
+            // First value: sent then lost.
+            // Second value: sent then received.
+            // Ordering 1 of 3.
+            vec![
+                E::Out(0),
+                E::Out(1),
+                E::In(ChoiceSetRecvResult::Lost(0)),
+                E::In(ChoiceSetRecvResult::Received(1)),
+                E::In(ChoiceSetRecvResult::Empty),
+            ],
+            // First value: sent then lost.
+            // Second value: sent then received.
+            // Ordering 2 of 3.
+            vec![
+                E::Out(0),
+                E::Out(1),
+                E::In(ChoiceSetRecvResult::Received(1)),
+                E::In(ChoiceSetRecvResult::Lost(0)),
+                E::In(ChoiceSetRecvResult::Empty),
+            ],
+            // First value: sent then lost.
+            // Second value: sent then received.
+            // Ordering 3 of 3.
+            vec![
+                E::Out(0),
+                E::In(ChoiceSetRecvResult::Lost(0)),
+                E::Out(1),
+                E::In(ChoiceSetRecvResult::Received(1)),
+                E::In(ChoiceSetRecvResult::Empty),
+            ],
+        ]);
+        want.extend(vec![
+            // First value: sent then lost.
+            // Second value: sent after receiver terminates.
+            // Ordering 1 of 1.
+            vec![
+                E::Out(0),
+                E::In(ChoiceSetRecvResult::Lost(0)),
+                E::In(ChoiceSetRecvResult::Empty),
+                E::Out(1),
+            ],
+            // First value: sent after receiver terminates.
+            // Second value: sent after receiver terminates.
+            // Ordering 1 of 1.
+            vec![E::In(ChoiceSetRecvResult::Empty), E::Out(0), E::Out(1)],
+            // First value: sent then received.
+            // Second value: sent after receiver terminates.
+            // Ordering 1 of 1.
+            vec![
+                E::Out(0),
+                E::In(ChoiceSetRecvResult::Received(0)),
+                E::In(ChoiceSetRecvResult::Empty),
+                E::Out(1),
+            ],
+        ]);
+        want.sort();
+        want
+    };
+
+    // Assert the sizes of the un-dedupped wanted and observed logs.
+    // TODO(rw): Figure out how to lower the number of duplicated trajectories: ideally, the number
+    // of observed logs should be equal to the number of unique trajectories.
+    assert_eq!(want.len(), 15);
+    assert_eq!(got.len(), 77);
+
+    // Deduplicate the observed logs.
+    got.sort();
+    got.dedup();
+
+    assert_eq!(want, got);
 }
 
 /// Tests that the trajectories in the system exactly match the expected counts.
