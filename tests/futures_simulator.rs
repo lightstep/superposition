@@ -809,7 +809,7 @@ fn choice_set_client_server() {
     // TODO(rw): Figure out how to lower the number of duplicated trajectories: ideally, the number
     // of observed logs should be equal to the number of unique trajectories.
     assert_eq!(want.len(), 15);
-    assert_eq!(got.len(), 77);
+    assert_eq!(got.len(), 49);
 
     // Deduplicate the observed logs.
     got.sort();
