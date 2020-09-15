@@ -16,9 +16,17 @@ pub enum ChoiceSetRecvResult<T> {
 ///
 /// TODO(rw): Model delivering a message more than once.
 /// TODO(rw): Reduce the number of duplicated trajectories.
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Debug)]
 pub struct ChoiceSet<T> {
     items: Rc<RefCell<Vec<T>>>,
+}
+
+/// Implement Default on ChoiceSet so that T does not need to be Default.
+impl<T> std::default::Default for ChoiceSet<T> {
+    fn default() -> Self {
+        let items = Default::default();
+        Self { items }
+    }
 }
 
 impl<T> ChoiceSet<T> {
@@ -42,23 +50,17 @@ impl<T> ChoiceSet<T> {
     pub async fn recv(&self, spawner: &Spawner) -> ChoiceSetRecvResult<T> {
         yield_now().await;
 
-        if self.items.borrow().is_empty() {
-            ChoiceSetRecvResult::Empty
-        } else {
-            // borrow to get length, then release the borrow so that it is not held over a yield
-            // point.
-            let l = self.items.borrow().len();
-
-            // Obtain the index of the item to remove, then remove it.
-            let idx = spawner.hilberts_epsilon(l).await;
-            let item = self.items.borrow_mut().swap_remove(idx);
-
-            // Obtain the decision for whether to deliver or lose the item, then return the
-            // outcome.
-            if spawner.hilberts_epsilon(2).await == 0 {
-                ChoiceSetRecvResult::Received(item)
-            } else {
-                ChoiceSetRecvResult::Lost(item)
+        // Only the tail needs to be examined, not the whole vec, because the simulator will
+        // explore all insertion orderings.
+        let item = self.items.borrow_mut().pop();
+        match item {
+            None => ChoiceSetRecvResult::Empty,
+            Some(item) => {
+                if spawner.hilberts_epsilon(2).await == 0 {
+                    ChoiceSetRecvResult::Received(item)
+                } else {
+                    ChoiceSetRecvResult::Lost(item)
+                }
             }
         }
     }
