@@ -7,10 +7,10 @@ description = "Verify concurrent behavior of real code using finite-space model 
 publish = false
 
 [dependencies]
-futures-intrusive = { version = "0.3", default-features = false, features = [ "alloc" ] }
-futures-lite = "0.1"
+futures-intrusive = { version = "0.4", default-features = false, features = [ "alloc", "std" ] }
+futures-lite = "1.11"
 futures-util = "0.3"
-pin-project-lite = "0.1"
+pin-project-lite = "0.2"
 thiserror = "1"
 
 [dev-dependencies]

@@ -54,7 +54,7 @@ fn stream_iteration() {
     struct MyTest {
         num_trajectories: usize,
         values: Rc<RefCell<Vec<u8>>>,
-    };
+    }
     impl Controller for MyTest {
         fn on_restart(&mut self, spawner: &Spawner) {
             let mut s = stream::iter(vec![1, 2, 3]);
@@ -95,7 +95,7 @@ fn detects_race_condition() {
         b: Rc<RefCell<isize>>,
         num_failed: usize,
         num_trajectories: usize,
-    };
+    }
 
     impl Controller for MyTest {
         #[inline]
@@ -243,7 +243,7 @@ fn multiple_hilberts_epsilons_do_not_explode_state_space() {
     struct MyTest {
         tuples: Rc<RefCell<std::collections::BTreeSet<(u8, i8, usize)>>>,
         num_trajectories: usize,
-    };
+    }
 
     impl Controller for MyTest {
         #[inline]
@@ -295,7 +295,7 @@ fn nested_hilberts_epsilons_increase_state_space_only_minimally() {
     #[derive(Default)]
     struct MyTest {
         num_trajectories: usize,
-    };
+    }
 
     impl Controller for MyTest {
         #[inline]
@@ -353,7 +353,7 @@ fn choice_stream_validity() {
 
         /// The choice made by the current trajectory, collected at the end.
         this_choice: Rc<RefCell<usize>>,
-    };
+    }
 
     impl Controller for TestState {
         fn on_restart(&mut self, spawner: &Spawner) {

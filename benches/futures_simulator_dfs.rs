@@ -7,7 +7,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 
 use superposition::{
     dfs::Dfs,
-    futures::{utils::yield_now, Controller, Executor, Simulator, Spawner},
+    futures::{utils::yield_now, ChoiceTaken, Controller, Executor, Simulator, Spawner},
 };
 
 #[derive(Default, Copy, Clone)]
@@ -40,7 +40,7 @@ impl Controller for MyBench {
         }
     }
     #[inline]
-    fn on_transition(&mut self) {}
+    fn on_transition(&mut self, _: ChoiceTaken) {}
     #[inline]
     fn on_end_of_trajectory(&mut self, _ex: &Executor) {}
 }
