@@ -54,7 +54,7 @@ fn stream_iteration() {
     struct MyTest {
         num_trajectories: usize,
         values: Rc<RefCell<Vec<u8>>>,
-    };
+    }
     impl Controller for MyTest {
         fn on_restart(&mut self, spawner: &Spawner) {
             let mut s = stream::iter(vec![1, 2, 3]);
@@ -95,7 +95,7 @@ fn detects_race_condition() {
         b: Rc<RefCell<isize>>,
         num_failed: usize,
         num_trajectories: usize,
-    };
+    }
 
     impl Controller for MyTest {
         #[inline]
@@ -113,6 +113,7 @@ fn detects_race_condition() {
                     if i == 0 {
                         // Intentional bug: this lock is dropped too early, because the guard is
                         // not bound to anything.
+                        #[allow(clippy::let_underscore_lock)]
                         let _ = lock.lock().await;
 
                         if *a.borrow() >= 10 {
@@ -243,7 +244,7 @@ fn multiple_hilberts_epsilons_do_not_explode_state_space() {
     struct MyTest {
         tuples: Rc<RefCell<std::collections::BTreeSet<(u8, i8, usize)>>>,
         num_trajectories: usize,
-    };
+    }
 
     impl Controller for MyTest {
         #[inline]
@@ -295,7 +296,7 @@ fn nested_hilberts_epsilons_increase_state_space_only_minimally() {
     #[derive(Default)]
     struct MyTest {
         num_trajectories: usize,
-    };
+    }
 
     impl Controller for MyTest {
         #[inline]
@@ -353,7 +354,7 @@ fn choice_stream_validity() {
 
         /// The choice made by the current trajectory, collected at the end.
         this_choice: Rc<RefCell<usize>>,
-    };
+    }
 
     impl Controller for TestState {
         fn on_restart(&mut self, spawner: &Spawner) {
@@ -387,7 +388,7 @@ fn choice_stream_validity() {
     dfs(&mut sim, None).unwrap();
 
     let state: TestState = sim.take_controller();
-    let mut choices: Vec<usize> = state.seen_choices.iter().copied().collect();
+    let mut choices: Vec<usize> = state.seen_choices.to_vec();
     choices.sort_unstable();
     assert_eq!(choices, vec![0, 1, 2, 3, 4]);
     assert_eq!(state.num_trajectories, 5);
@@ -429,7 +430,7 @@ fn task_id_tracking() {
         fn on_end_of_trajectory(&mut self, ex: &Executor) {
             assert_eq!(0, ex.unfinished_tasks());
 
-            let log = std::mem::replace(&mut self.log, Vec::new());
+            let log = std::mem::take(&mut self.log);
             self.logs.push(log);
         }
     }
@@ -488,7 +489,7 @@ fn hilbert_epsilon_id_tracking() {
         fn on_end_of_trajectory(&mut self, ex: &Executor) {
             assert_eq!(0, ex.unfinished_tasks());
 
-            let log = std::mem::replace(&mut self.log, Vec::new());
+            let log = std::mem::take(&mut self.log);
             self.logs.push(log);
         }
     }

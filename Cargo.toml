@@ -2,15 +2,15 @@
 name = "superposition"
 version = "0.1.0"
 authors = ["Robert Winslow (Finite Automata) <robert@eradb.com>"]
-edition = "2018"
+edition = "2021"
 description = "Verify concurrent behavior of real code using finite-space model checking."
 publish = false
 
 [dependencies]
-futures-intrusive = { version = "0.3", default-features = false, features = [ "alloc" ] }
-futures-lite = "0.1"
+futures-intrusive = { version = "0.4", default-features = false, features = [ "alloc", "std" ] }
+futures-lite = "1.12"
 futures-util = "0.3"
-pin-project-lite = "0.1"
+pin-project-lite = "0.2"
 thiserror = "1"
 
 [dev-dependencies]
