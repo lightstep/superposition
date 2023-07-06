@@ -54,3 +54,7 @@ Exact: The number of concurrent processes and the number of yield calls (to the 
 Detects deadlocks: See the test suite for an example.
 
 Detects livelocks: See the test suite for an example.
+
+
+## Vulnerability Reporting
+Please notify psirt-oss@servicenow.com regarding any vulnerability reports in addition to following current reporting procedure.
